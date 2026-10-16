@@ -17,7 +17,7 @@ Ranking is fewest hubs first, then lowest **J = L + 5X + O + 0.5B**. The whole p
 - Authoritative brief: `Cable Ring Challenge - Problem Statement4.pptx`.
 - Repo: https://github.com/abhib05/HackHive_control_hub (private). The author pushes. **Never add a Claude co-author trailer to commits.**
 
-## 2. Current state (2026-10-16)
+## 2. Current state (2026-10-17)
 
 ### Git
 
@@ -27,7 +27,7 @@ Ranking is fewest hubs first, then lowest **J = L + 5X + O + 0.5B**. The whole p
   - `519e344`: the rip-up and reroute step
   - `e33ec8a`: the web app, live solver events, greedy hub relocation
   - `03f1780`: handoff notes, conversation log and the intermediate-update deck
-- **Working branch `solver-optimization`** (local, uncommitted): the optimisation work, see `OPTIMIZATION_REPORT.md` and CONVERSATION_LOG entry 22.
+- **Branch `solver-optimization`: committed as `3bd28f1` and pushed to `origin/solver-optimization` on 2026-10-17** and `main` fast-forwarded to it and pushed (both equal on GitHub). Everything listed below is in that commit. The optimisation work, see `OPTIMIZATION_REPORT.md` and CONVERSATION_LOG entry 22.
   - Modified: `hub_routing.py` (guided exact searches, sparse penalties, pruned hub scan, faster grid build, soft corner lines that never move device lines, stage timings/counters, optional ring/segment/kick moves off by default, hard deadline), `resplan_solver.py` (corner lines on by default, `hard_limit_s`, timings in the JSON), `run_example.py` (full hub map for its figure), `run_resplan.py` (`--grid`, `--no-corner-lines`), `web_app.py` (slow speeds lift the hard limit), `web/index.html` (batch results table: number columns right-aligned), `README.md`, `CLAUDE.md`, `.gitignore` (`bench_results/`). `example_final_cables.png` and `example_solution.json` were regenerated (same J 53.68).
   - New: `bench_solver.py`, `bench_sets.json`, `tests/test_solver.py` (17 tests now, all pass), `OPTIMIZATION_REPORT.md` (results still being written).
   - Image input (log entry 44, done and tested): new `image_input.py` (colour-coded floor-plan image -> ResPlan-style plan, then the normal pipeline; cv2 + rasterio), `sample_images/` (5 PNGs: colour, legend, room-title drawings, one with area labels), `run_resplan.py --image/--area/--palette/--image-mode`, OCR via Tesseract (entry 45), floor area optional: scale from room area labels when not given (entry 48), web app upload (`web_app.py`, `web/app.js`, `web/index.html`, `web/style.css`), output in `image_output/` (git-ignored). Tests: 17, all pass.
@@ -141,6 +141,7 @@ Other behaviour:
 
 ## 6. Exact next steps, in order
 
+00. **Chatbot** (log entry 52): offline rule-based version recommended (no API key), about 3-3.5 h; waiting for the user's go.
 0. **For the judges' presentation (next day):** re-run the test split with the current code (`python run_resplan.py --split test --force`, about 15 min) and take the metrics from its summary (log entry 39). Restart the web app afterwards, since it only loads results at start-up.
 0a. **No retracing (log entry 50, uncommitted):** `hub_routing.NO_RETRACE = True`: a ring never uses a line twice (one-device rings are small rectangles); val100: all valid, same hubs, J +0.48. Stored results in `resplan_output` predate it: re-run the test split (`python run_resplan.py --split test --force`).
 0b. **Image input (new, uncommitted):** `image_input.py`, `run_resplan.py --image ... --area ...`, web app upload; output in `image_output\`. OCR for room titles and legends added (log entry 45; Tesseract installed on this laptop; another computer needs it installed too).

@@ -145,15 +145,25 @@ Last updated: 2026-10-17.
     - PLAN_014433 H2 is now a 4 x 5 cm rectangle (0.18 m, 4 bends); every ring self-overlap 0; checker agrees.
     - val100 paired: all valid, same hubs, 0 crossings; mean J 44.82 -> 45.30 (+0.48), worse in 71 plans (max +2.9), O 0.19 -> 0, B +1.2, runtime +14%. 17 tests pass. Stored results in resplan_output were made with the old rule until re-run. Not committed.
 
+51. **Test-split re-run:** the user will run it themselves from cmd (`python run_resplan.py --split test --force`, about 15-20 min), then restart the web app. When the user later asked to stop all processes, no test run was active (only the web app); its result is not known here.
+
+52. **Chatbot in the web app** (user: talk in natural language about why routing decisions were made; how long?). Needs a "decision record" from the solver (hub lower bound and why, groupings tried and rejected, hub point vs next-best, orders tried, leg detours, J breakdown) plus a chat panel. Options: A Claude API (needs a key and internet, about 2.5-3 h), B offline rule-based templates (about 3-3.5 h), C local model via Ollama (about +1 h on top of B, 2-5 GB download, slow on CPU). The user has no Claude API key (Claude Code cannot act as the website's backend; a Claude subscription does not include API access; none set on this laptop). Recommended B for the demo. **Not started**, waiting for the user's go.
+
+53. **Stopped all processes** (user request): only the web app (`web_app.py`) was running; stopped. No Python processes left.
+
+54. **Pushed to GitHub** (user request): all changes committed on `solver-optimization` as `3bd28f1` ("Solver optimisation, rule-2 area cap, no-retrace rings, image input with OCR", 26 files, no Claude trailer) and pushed to `origin/solver-optimization` (https://github.com/abhib05/HackHive_control_hub). Then (user request) `main` was fast-forwarded to `3bd28f1` and pushed; both branches are equal on GitHub.
+
+51. **Stage 2 pruning explained** (user, side session; no files changed). Every candidate hub point gets a cheap lower bound from the distance tables (cheapest first device -> point + cheapest device chain + cheapest last device -> point, bends at the joins ignored, so it never overestimates); points are sorted by it, the best 64 get the exact ring cost, and any other point is computed only if its bound can still beat the best found. Same hub as a full scan (`test_hub_prune_gives_same_hub`); PLAN_014433: 66,568 of 167,130 points computed exactly (60% skipped). User asked if this is a heuristic: yes, an admissible one (a lower bound), i.e. branch and bound; the same idea guides the Stage-3 leg searches as an A* heuristic, so neither loses the optimal answer.
+
 ## Open questions (for the user or the organisers)
 
-- Re-run the test split so stored results use the no-retrace rule (entry 50)? Asked, not answered.
+- Test split re-run (entry 51): the user runs it; result not seen yet.
+- Build the chatbot, option B (entry 52)? Waiting for the user.
 
 - Augmented-outline repair (entry 43): build it now?
 
 - Keep greedy hub relocation on (tiny gain, small runtime cost) or switch it off?
 - Default grid: 0.1 m + corner lines (best J) or 0.2 m + corner lines (`--grid 0.2`)? Final benchmark: the 0.2 m option has J +0.04 (val100) / +0.18 (hard15) at about 0.45x the runtime.
-- Commit / merge the `solver-optimization` branch (user's call).
 - Fix the web app's plan list so results written after start-up show up (not asked yet)?
 - Fix scrap rooms (< ~0.5 m2) and per-zone hub clearance (PLAN_003931, PLAN_011279)? Offered, not answered.
 - Build the edge-case tag set (`edge150`)? Offered.
