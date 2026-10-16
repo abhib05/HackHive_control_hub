@@ -82,6 +82,23 @@ Options:
 | `--write-inputs` | also save each plan's input JSON |
 | `--inputs DIR` | read plan input JSON files instead of the pickle |
 
+## Web app: watch the solver run
+
+```
+python web_app.py
+```
+
+This opens **Cable Ring Studio** at http://127.0.0.1:8765 in your browser. Press Ctrl+C in the cmd window to stop it. It needs no extra packages (Python standard library only), and the dataset takes 15–20 s to load when it starts.
+
+- **Plan viewer:** pick any of the 17,000 plans by split, result or id. The input floor plan (rooms, walls, doors, windows) is on the left; the output (zones, hubs, devices, rings, visiting order) is on the right.
+- **Run solver:** streams every step live: devices, the routing grid, door links, zones and hub points, each ring leg as it is routed (dashed while a visiting order is being tried), the clean-up step and the final check. Stage timings, the live J, a hubs table and a running log appear under the panels.
+- **Speed:** Instant, Watch or Slow. The slow speeds only add pauses, so the result is the same.
+- **Layers:** room labels, grid lines (with the extra line through each device), door links used for rule 3, visiting order. Scroll to zoom and drag to pan; both panels move together.
+- **Save** writes a live result to `resplan_output` (JSON + PNG). **JSON** downloads it.
+- **Batch run:** the same runs as `run_resplan.py` (first N, a split, random N, chosen ids or all), with live progress, counters, a hubs histogram, J per plan, and a results table you can click to open any plan. Reloading the page reattaches to a running batch. Stop cancels the plans in progress.
+
+Options: `--port 9000`, `--no-browser`, `--out DIR`.
+
 ## Output JSON (per plan)
 
 The organisers' fields:
@@ -111,6 +128,7 @@ Coordinates are in metres (drawing units ÷ scale), origin lower-left, y up. Eac
 | File | Purpose |
 |---|---|
 | `run_resplan.py` | Batch runner (the one to run): selects plans, runs them in parallel, writes JSON, PNG and summary.csv |
+| `web_app.py`, `web/` | Cable Ring Studio: local web app to browse plans, watch the solver live and run batches |
 | `resplan_solver.py` | Per plan: units to metres, device placement, door/opening links, output JSON, independent checker, overlay |
 | `hub_routing.py` | The algorithm: grid, stages 1–4, scoring (J) and rule checks |
 | `run_example.py`, `example_plan.py` | The organisers' 14 m × 9 m example plan |

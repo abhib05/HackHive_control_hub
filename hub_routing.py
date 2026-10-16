@@ -50,6 +50,9 @@ HUB_WALL_CLEARANCE = 0.5
 BLOCKED = 1e6          # cost of running through another hub or node point (rule 4)
 LB_SLACK = 1e-3        # float32 distance tables: keep pruning on the safe side
 IMPROVE_TOP, IMPROVE_MARGIN, IMPROVE_TIME_S = 3, 2.5, 30.0   # rip-up and reroute: designs, J window, time cap
+HUB_SEARCH = "exhaustive"   # stage-2 hub point: "exhaustive" (every legal vertex) or "greedy" (hill climbing)
+HUB_MOVES = True      # rip-up and reroute also moves hubs (greedy, see _hub_moves)
+HUB_TRIES, HUB_SPACING = 12, 0.25   # hub points tried per hub and round; tried points kept >= this far apart (m)
 
 # direction codes: 0 = +x (E), 1 = +y (N), 2 = -x (W), 3 = -y (S)
 OPP = np.array([2, 3, 0, 1])
@@ -415,6 +418,35 @@ def _minplus(M, T):
     return (M[:, :, None] + T[None, :, :]).min(1)
 
 
+def _greedy_hub(grid, cand, start, ends, ring):
+    """Hill climbing (steepest descent) for the hub point: start at the legal vertex nearest the node
+    centroid, evaluate the 4 neighbouring legal vertices, move to the cheapest while it is cheaper.
+    Only visited vertices are evaluated (J is inf elsewhere). Returns (J per candidate, index or None)."""
+    pos = {int(v): i for i, v in enumerate(cand)}
+    J = np.full(len(cand), np.inf)
+
+    def cost(idx):
+        idx = np.asarray([i for i in idx if not np.isfinite(J[i])], dtype=int)
+        if len(idx):
+            v = np.full(len(idx), np.inf)
+            for (s, t), M in ends.items():
+                v = np.minimum(v, ring(s, t, M, idx))
+            J[idx] = v
+
+    cur = start
+    cost([cur])
+    if not np.isfinite(J[cur]):
+        return J, None
+    while True:
+        v = int(cand[cur])
+        nb = [pos[m] for m in (v + 1, v - 1, v + grid.nx, v - grid.nx) if m in pos]
+        cost(nb)
+        best = min(nb, key=lambda i: J[i], default=None)
+        if best is None or J[best] >= J[cur] - 1e-9:
+            return J, cur
+        cur = best
+
+
 def evaluate_group(plan, grid, group, prep, clearance=HUB_WALL_CLEARANCE):
     """Best hub vertex for one group: exact ring cost L + 0.5B (turns at the hub and every node
     included, best visiting order, other wires ignored) at every legal hub vertex (rule 6)."""
@@ -466,15 +498,20 @@ def evaluate_group(plan, grid, group, prep, clearance=HUB_WALL_CLEARANCE):
         T1 = (Ain[s][sel][:, :, :, None] + M[None, None, :, :]).min(2)         # [c, ah, al]
         return (T1 + Aout[t][sel].transpose(0, 2, 1)).min((1, 2))
 
-    J = np.full(len(cand), np.inf)
-    for (s, t), M in ends.items():
-        J = np.minimum(J, ring(s, t, M))
-    if not np.isfinite(J).any():
-        return out
     dc = np.hypot(grid.X[cand] - cx, grid.Y[cand] - cy)
     start = int(np.argmin(dc))                  # node centroid, moved to the nearest legal hub vertex
-    tie = np.nonzero(J <= J.min() + 1e-4)[0]
-    opt = int(tie[np.argmin(dc[tie])])          # among equal-cost vertices, closest to the centroid
+    if HUB_SEARCH == "greedy":
+        J, opt = _greedy_hub(grid, cand, start, ends, ring)
+        if opt is None:
+            return out
+    else:
+        J = np.full(len(cand), np.inf)
+        for (s, t), M in ends.items():
+            J = np.minimum(J, ring(s, t, M))
+        if not np.isfinite(J).any():
+            return out
+        tie = np.nonzero(J <= J.min() + 1e-4)[0]
+        opt = int(tie[np.argmin(dc[tie])])      # among equal-cost vertices, closest to the centroid
     sel = slice(opt, opt + 1)
     perm_lb = {}
     for p, M in chains.items():                 # lower bound of every visiting order at the chosen hub
@@ -598,13 +635,14 @@ def _leg_limit(F, a, b):
     return 1.5 * float(F[n][:, m, :].min()) + 12.0 if n in F else np.inf
 
 
-def sequential_loop(grid, hub, order, base_loops, terminals=None, penalise=True, F=None, base_usage=None):
+def sequential_loop(grid, hub, order, base_loops, terminals=None, penalise=True, F=None, base_usage=None,
+                    emit=None):
     """Route the ring leg by leg in visiting order. With penalise, every leg pays the exact J increase
     it causes against the wires already routed (overlap 1/m, crossing 5, see _penalised_graph). Turns
     at hub/nodes are charged. With F (node distance tables keyed by node vertex) each leg also weighs
     the rest of the ring per arrival direction, so it does not arrive at a node facing the wrong way,
     and its search is bounded by its unhindered cost (exact: it re-runs unbounded if needed). Returns
-    None if a leg cannot be routed."""
+    None if a leg cannot be routed. emit(kind, **data), if given, is told about every leg (live view)."""
     usage = (base_usage or Usage(grid, base_loops)).copy()
     pairs = _loop_points(hub, order)
     legs = []
@@ -621,10 +659,12 @@ def sequential_loop(grid, hub, order, base_loops, terminals=None, penalise=True,
             return None
         legs.append(leg)
         usage.add(leg)
+        if emit:
+            emit("leg", hub=hub, order=list(order), legs=list(legs))
     return dict(hub=hub, order=list(order), legs=legs)
 
 
-def best_order_loop(grid, hub, devs, base_loops, terminals=None, perm_lb=None, F=None):
+def best_order_loop(grid, hub, devs, base_loops, terminals=None, perm_lb=None, F=None, emit=None):
     """Sequential routing for every visiting order (both directions); keep the lowest J. With perm_lb
     (stage-2 cost of each order at this hub) orders are tried cheapest first and the search stops once
     no remaining order can beat the best J found."""
@@ -636,11 +676,16 @@ def best_order_loop(grid, hub, devs, base_loops, terminals=None, perm_lb=None, F
     best, best_J = None, np.inf
     for order in orders:
         if perm_lb and J_base + perm_lb.get(order, 0.0) - LB_SLACK >= best_J:
+            if emit:
+                emit("log", msg=f"remaining visiting orders skipped: their lower bound "
+                                f"{J_base + perm_lb.get(order, 0.0):.2f} >= best J {best_J:.2f}")
             break
-        loop = sequential_loop(grid, hub, order, base_loops, terminals, F=F, base_usage=base_usage)
+        loop = sequential_loop(grid, hub, order, base_loops, terminals, F=F, base_usage=base_usage, emit=emit)
         if loop is None:
             continue
         J = measure(grid, base_loops + [loop], terminals)["J"]
+        if emit:
+            emit("attempt", hub=hub, order=list(order), legs=loop["legs"], J=J, best=bool(J < best_J - 1e-9))
         if J < best_J - 1e-9:
             best, best_J = loop, J
     return best
@@ -656,25 +701,102 @@ def _usage_without(grid, loops, skip):
     return u
 
 
-def improve_rings(grid, loops, terminals=None, F=None, max_rounds=5, deadline=None):
+def _hub_legs_cost(grid, loop, rest, terminals):
+    """Exact share of J of a ring's two hub legs (last node -> hub -> first node), given the usage of
+    every other wire: their length, the bends inside them and at their three ends, the overlap and the
+    crossing points they add."""
+    legs = loop["legs"]
+    l0, lL = legs[0], legs[-1]
+    d0, dL = grid.dirs(l0), grid.dirs(lL)
+    B = int(BENDS[d0[:-1], d0[1:]].sum() + BENDS[dL[:-1], dL[1:]].sum()) + int(BENDS[dL[-1], d0[0]])
+    if len(legs) > 2:
+        B += int(BENDS[grid.last_dir(legs[-2]), dL[0]] + BENDS[d0[-1], grid.first_dir(legs[1])])
+    else:
+        B += int(BENDS[d0[-1], dL[0]])
+    e = np.concatenate([grid.edge_ids(l0), grid.edge_ids(lL)])
+    c = np.bincount(e, minlength=2 * grid.N)
+    u = rest.edge_use
+    O = float((grid.elen * (np.maximum(u + c - 1, 0) - np.maximum(u - 1, 0))).sum())
+    after = rest.copy()
+    after.add(l0)
+    after.add(lL)
+    new_x = after.crossing_points() & ~rest.crossing_points()
+    new_x[terminals] = False
+    return grid.path_length(l0) + grid.path_length(lL) + W_BEND * B + W_OVERLAP * O + W_CROSS * int(new_x.sum())
+
+
+def _hub_legs_bound(grid, F, loop, cand):
+    """Lower bound on that share for every candidate hub vertex in cand: the unhindered cost (length +
+    0.5/turn, turns at the hub and at both node ends included) of last node -> c -> first node."""
+    legs, order = loop["legs"], loop["order"]
+    if len(legs) > 2:
+        t_l = TURN[grid.last_dir(legs[-2])]              # [b]: turn at the last node into first move b
+        t_0 = TURN[OPP, grid.first_dir(legs[1])]         # [b]: table is reversed, the wire arrives with OPP[b]
+    else:
+        t_l = t_0 = np.zeros(4)
+    FL = (F[order[-1]][:, cand, :] + t_l[:, None, None]).min(0)    # [c, a]: last leg arrives at c with a
+    F0 = (F[order[0]][:, cand, :] + t_0[:, None, None]).min(0)     # [c, a']: first leg leaves c with OPP[a']
+    return (FL[:, :, None] + F0[:, None, :] + TURN[:, OPP][None]).min((1, 2))
+
+
+def _hub_moves(grid, loops, r, F, cand, terminals):
+    """Greedy hub relocation candidates for ring r: legal hub vertices of its zone (cand) that no other
+    wire or hub uses and whose bound beats the current hub legs' exact share of J, cheapest bound first,
+    at most HUB_TRIES of them and at least HUB_SPACING apart. Yields (vertex, usage of the other wires)."""
+    legs = loops[r]["legs"]
+    n = len(legs)
+    rest = _usage_without(grid, loops, {(r, 0), (r, n - 1)})
+    cost = _hub_legs_cost(grid, loops[r], rest, terminals)
+    busy = np.zeros(grid.N, bool)
+    busy[terminals] = True
+    for q, l in enumerate(loops):
+        for i, leg in enumerate(l["legs"]):
+            if q != r or 0 < i < n - 1:
+                busy[leg] = True
+    c = cand[~busy[cand]]
+    if len(c) == 0:
+        return
+    est = _hub_legs_bound(grid, F, loops[r], c)
+    keep = est < cost - LB_SLACK                         # the others cannot lower J
+    c, est = c[keep], est[keep]
+    tried = []
+    for j in np.argsort(est, kind="stable"):
+        if len(tried) >= HUB_TRIES:
+            return
+        x, y = grid.X[c[j]], grid.Y[c[j]]
+        if any(abs(x - tx) < HUB_SPACING and abs(y - ty) < HUB_SPACING for tx, ty in tried):
+            continue
+        tried.append((x, y))
+        yield int(c[j]), rest
+
+
+def improve_rings(grid, loops, terminals=None, F=None, max_rounds=5, deadline=None, emit=None, cands=None):
     """Rip-up and reroute after stage 3. Stage 3 routes a ring's legs one after another (and rings one
-    after another), so early legs never see the wires routed after them. Two moves, repeated until a
-    round changes nothing:
+    after another), so early legs never see the wires routed after them. Moves, repeated until a round
+    changes nothing:
       leg   re-route one leg against all other wires, turns at both ends charged;
       pair  re-route the two legs at a node in reverse order: the outgoing leg first, then the incoming
-            one against it (frees the line the incoming leg took into a dead-end room).
+            one against it (frees the line the incoming leg took into a dead-end room);
+      hub   (with cands, one array of legal hub vertices per ring, and F) greedy hub relocation: move
+            the hub to the most promising other legal point (see _hub_moves) and re-route its two legs
+            against all other wires; the first point that lowers J is taken, then the search repeats
+            from there.
     A change is kept only if the exact J of the whole design drops, so J never increases."""
     if terminals is None:
         terminals = np.array(sorted({l["hub"] for l in loops} | {n for l in loops for n in l["order"]}))
     loops = [dict(l, legs=list(l["legs"])) for l in loops]
     J = measure(grid, loops, terminals)["J"]
 
-    def keep(r, legs):
-        nonlocal loops, J
-        cand = loops[:r] + [dict(loops[r], legs=legs)] + loops[r + 1:]
-        Jn = measure(grid, cand, terminals)["J"]
+    def keep(r, legs, hub=None):
+        nonlocal loops, J, terminals
+        new = dict(loops[r], legs=legs) if hub is None else dict(loops[r], legs=legs, hub=hub)
+        cand = loops[:r] + [new] + loops[r + 1:]
+        term = terminals if hub is None else np.where(terminals == loops[r]["hub"], hub, terminals)
+        Jn = measure(grid, cand, term)["J"]
         if Jn < J - 1e-9:
-            loops, J = cand, Jn
+            loops, J, terminals = cand, Jn, term
+            if emit:
+                emit("improve", loops=loops, J=J)
             return True
         return False
 
@@ -716,32 +838,66 @@ def improve_rings(grid, loops, terminals=None, F=None, max_rounds=5, deadline=No
                 trial = list(legs)
                 trial[i], trial[j] = inn, out
                 better |= keep(r, trial)
+        if cands is not None and F is not None:
+            for r in range(len(loops)):
+                moved = True
+                while moved:                             # greedy: restart from the new hub point
+                    moved = False
+                    legs, h = loops[r]["legs"], loops[r]["hub"]
+                    n, o0, ol = len(legs), loops[r]["order"][0], loops[r]["order"][-1]
+                    for v, rest in _hub_moves(grid, loops, r, F, cands[r], terminals):
+                        if late():
+                            return loops
+                        term = np.where(terminals == h, v, terminals)
+                        back = grid.route(_penalised_graph(grid, rest, v, term), ol, v,
+                                          grid.last_dir(legs[-2]) if n > 2 else None, limit=_leg_limit(F, ol, v))
+                        if back is None:
+                            continue
+                        u = rest.copy()
+                        u.add(back)
+                        after = grid.first_dir(legs[1]) if n > 2 else grid.first_dir(back)
+                        out = grid.route(_penalised_graph(grid, u, o0, term), v, o0, grid.last_dir(back), after,
+                                         limit=_leg_limit(F, v, o0))
+                        if out is None:
+                            continue
+                        if keep(r, [out] + legs[1:-1] + [back], hub=v):
+                            better = moved = True
+                            if emit:
+                                emit("log", msg=f"hub {r + 1} moved: J {J:.2f}")
+                            break
         if not better:
             break
     return loops
 
 
-def route_rings(grid, evs, prep=None):
+def route_rings(grid, evs, prep=None, emit=None):
     """Stage 3 (method 3): for each hub in turn, route its ring sequentially with overlap/crossing
     penalties for every visiting order and keep the order with the lowest exact J, counting
     interactions with the rings already routed. Returns None if a ring cannot be routed."""
     terminals = np.array(sorted({ev["hub"] for ev in evs} | {d for ev in evs for d in ev["dev"]}))
     F = None if prep is None else {prep["devnode"][r]: f for r, f in prep["F"].items()}
     loops = []
-    for ev in evs:
-        loop = best_order_loop(grid, ev["hub"], ev["dev"], loops, terminals, ev.get("perm_lb"), F)
+    for i, ev in enumerate(evs):
+        e = None if emit is None else (lambda kind, _i=i, **d: emit(kind, ring=_i, **d))
+        loop = best_order_loop(grid, ev["hub"], ev["dev"], loops, terminals, ev.get("perm_lb"), F, emit=e)
         if loop is None:
+            if emit:
+                emit("log", msg=f"ring {i + 1} could not be routed")
             return None
         loops.append(loop)
+        if emit:
+            emit("ring", ring=i, hub=loop["hub"], order=loop["order"], legs=loop["legs"])
     return loops
 
 
 # --------------------------------------------------------------------------- stages 1-4 together
-def design(plan, grid, prep, clearance=HUB_WALL_CLEARANCE, max_k=None, log=None, deadline=None, max_routed=None):
+def design(plan, grid, prep, clearance=HUB_WALL_CLEARANCE, max_k=None, log=None, deadline=None, max_routed=None,
+           emit=None):
     """Fewest hubs first, then lowest J, then smallest area gap. Groupings are routed in order of their
     lower bound; routing stops once the bound exceeds the best J, or (keeping the best design found)
     at the deadline (time.perf_counter() value) or after max_routed groupings. The best few routed
-    designs then go through improve_rings (rip-up and reroute). k is None if nothing could be routed."""
+    designs then go through improve_rings (rip-up and reroute). k is None if nothing could be routed.
+    emit(kind, **data), if given, receives every step for a live view (vertex ids, not coordinates)."""
     rooms = plan.device_rooms()
     blocks = feasible_blocks(plan)
     cache = {}
@@ -752,27 +908,44 @@ def design(plan, grid, prep, clearance=HUB_WALL_CLEARANCE, max_k=None, log=None,
         return cache[b]
 
     stats = dict(lower_bound_hubs=hub_lower_bound(plan), blocks=len(blocks))
+    if emit:
+        emit("blocks", count=len(blocks), lower_bound_hubs=stats["lower_bound_hubs"], clearance=clearance)
     for k in range(max(stats["lower_bound_hubs"], 1), (max_k or len(rooms)) + 1):
         gs = list(groupings_with_hubs(plan, k, blocks))
         if not gs:
+            if emit:
+                emit("groupings", k=k, count=0, with_hub_points=0, top=[])
             continue
         scored = sorted(((sum(ev(b)["J"] for b in g), area_gap(plan, g), g) for g in gs), key=lambda s: s[:2])
         scored = [s for s in scored if np.isfinite(s[0])]
         stats.update(hubs_tried=k, groupings=len(gs), groupings_with_hub_points=len(scored))
+        if emit:
+            emit("groupings", k=k, count=len(gs), with_hub_points=len(scored),
+                 top=[dict(groups=g, lb=J2, gap=gap, hubs=[ev(b)["hub"] for b in g]) for J2, gap, g in scored[:12]])
         results, best_J, routed = [], np.inf, 0
         for J2, gap, g in scored:
             if J2 > best_J + LB_SLACK:
+                if emit:
+                    emit("log", msg=f"stop: next grouping's lower bound {J2:.2f} > best J {best_J:.2f}, "
+                                    f"{len(scored) - routed} groupings skipped")
                 break                                # sorted: no later grouping can win
             if results and ((deadline and time.perf_counter() > deadline) or (max_routed and routed >= max_routed)):
                 stats["stopped_early"] = True        # best design kept, remaining groupings not routed
                 break
-            loops = route_rings(grid, [ev(b) for b in g], prep)
+            if emit:
+                emit("grouping", index=routed, of=len(scored), groups=g, lb=J2, gap=gap,
+                     hubs=[ev(b)["hub"] for b in g])
+            loops = route_rings(grid, [ev(b) for b in g], prep, emit=emit)
             routed += 1
             if loops is None:
+                if emit:
+                    emit("routed", index=routed - 1, ok=False)
                 continue
             m = measure(grid, loops)
             results.append(dict(J=m["J"], gap=gap, groups=g, loops=loops, lb=J2, metrics=m))
             best_J = min(best_J, m["J"])
+            if emit:
+                emit("routed", index=routed - 1, ok=True, J=m["J"], metrics=m, loops=loops, groups=g, best_J=best_J)
         stats.update(groupings_routed=routed)
         if log:
             log(f"{k} hubs: {len(gs)} groupings, {len(scored)} with hub points, {routed} routed")
@@ -788,13 +961,20 @@ def design(plan, grid, prep, clearance=HUB_WALL_CLEARANCE, max_k=None, log=None,
                 stop = time.perf_counter() + IMPROVE_TIME_S          # the best design always gets its pass
                 if i and deadline:
                     stop = min(stop, deadline)
-                loops = improve_rings(grid, res["loops"], F=F, deadline=stop)
+                if emit:
+                    emit("improving", rank=i, J=res["J"], groups=res["groups"], loops=res["loops"])
+                cands = [ev(b)["cand"] for b in res["groups"]] if HUB_MOVES else None
+                loops = improve_rings(grid, res["loops"], F=F, deadline=stop, emit=emit, cands=cands)
                 m = measure(grid, loops)
+                if emit:
+                    emit("improved", rank=i, J_before=res["J"], J=m["J"])
                 res.update(J_routed=res["J"], J=m["J"], loops=loops, metrics=m)
                 J_best = min(J_best, m["J"])
             results.sort(key=key)
             best = results[0]
             stats.update(J_before_improve=round(best.get("J_routed", best["J"]), 4))
+            if emit:
+                emit("chosen", J=best["J"], groups=best["groups"], loops=best["loops"], metrics=best["metrics"])
             return dict(best, k=k, evs=[ev(b) for b in best["groups"]], stats=stats)
     return dict(k=None, stats=stats)
 

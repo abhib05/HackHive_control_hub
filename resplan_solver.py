@@ -343,10 +343,83 @@ def _base_output(inp, cfg):
     }
 
 
-def solve(inp, cfg=CONFIG):
+def _rings(q, nd=3):
+    """Polygon -> [exterior, *holes], each a list of [x, y]."""
+    return [[[round(x, nd), round(y, nd)] for x, y in r.coords] for r in [q.exterior, *q.interiors]]
+
+
+def plan_geometry(inp):
+    """Plan input -> drawing data in metres for the web viewer (web_app.py): rooms, walls, windows,
+    doors, front door, outline and nodes. Each polygon is [exterior, *holes]."""
+    s = inp["scale"]
+    poly = lambda g: [_rings(q) for q in polygons(to_m(g, s))]
+    fd = inp.get("front_door")
+    fd_lines = []
+    if fd is not None and not fd.is_empty and fd.geom_type in ("LineString", "MultiLineString"):
+        for ln in getattr(to_m(fd, s), "geoms", [to_m(fd, s)]):
+            fd_lines.append([[round(x, 3), round(y, 3)] for x, y in ln.coords])
+    rooms = []
+    for r in inp["rooms"]:
+        q = to_m(r["poly"], s)
+        c = q.representative_point()
+        rooms.append({"room_id": r["room_id"], "type": r["type"], "area_m2": r4(q.area),
+                      "has_device": r["type"] in DEVICE_TYPES, "polys": poly(r["poly"]),
+                      "label": [round(c.x, 3), round(c.y, 3)]})
+    return {
+        "plan_id": inp["plan_id"], "resplan_id": inp["resplan_id"], "scale_units_per_m": r4(s),
+        "area_m2": r4(inp["area_m2"]), "wall_depth_m": r4(inp["wall_depth"] / s),
+        "bounds": [r4(v) for v in to_m(inp["inner"], s).bounds],
+        "inner": poly(inp["inner"]), "walls": poly(inp["walls"]), "windows": poly(inp["windows"]),
+        "doors": [p for d in inp["doors"] for p in poly(d)],
+        "front_door": {"polys": poly(fd) if fd is not None and fd.geom_type in ("Polygon", "MultiPolygon") else [],
+                       "lines": fd_lines},
+        "rooms": rooms,
+        "nodes": [{"node_id": n["node_id"], "room_id": n["room_id"], "x": r4(n["x"] / s), "y": r4(n["y"] / s)}
+                  for n in inp["nodes"]],
+        "warnings": list(inp["warnings"]),
+    }
+
+
+def _live_emitter(emit, plan, grid, prep):
+    """Wraps emit(kind, data) for hub_routing's events: grid vertex ids -> [x, y] in metres, vertex paths
+    -> corner polylines, device vertices -> node labels."""
+    label = {v: plan.rooms[r].device_label for r, v in prep["devnode"].items()}
+    pt = lambda v: [r4(grid.X[v]), r4(grid.Y[v])]
+    line = lambda path: [[r4(x), r4(y)] for x, y in grid.corners(path)]
+
+    def conv(k, v):
+        if k == "hub":
+            return pt(v)
+        if k == "hubs":
+            return [pt(h) for h in v]
+        if k == "order":
+            return [label.get(n, str(n)) for n in v]
+        if k == "legs":
+            return [line(p) for p in v]
+        if k == "loops":
+            return [{"hub": pt(l["hub"]), "order": conv("order", l["order"]), "legs": conv("legs", l["legs"])}
+                    for l in v]
+        if k == "groups":
+            return [list(g) for g in v]
+        if k == "top":
+            return [{kk: conv(kk, vv) for kk, vv in t.items()} for t in v]
+        if k == "metrics":
+            return {a: float(b) for a, b in v.items()}
+        if isinstance(v, (np.floating, float)):
+            return r4(v) if math.isfinite(v) else None
+        if isinstance(v, np.integer):
+            return int(v)
+        return v
+
+    return lambda kind, **d: emit(kind, {k: conv(k, v) for k, v in d.items()})
+
+
+def solve(inp, cfg=CONFIG, emit=None):
     """Plan input -> output dict (slide-8 format plus status, violations, warnings and diagnostics).
-    Also returns the internal objects for drawing: (out, extras)."""
+    Also returns the internal objects for drawing: (out, extras). emit(kind, data), if given, receives
+    every step as it happens (web_app.py live view); it may raise to cancel the run."""
     t0 = time.perf_counter()
+    note = (lambda kind, **d: emit(kind, d)) if emit else (lambda kind, **d: None)
     out = _base_output(inp, cfg)
     s = inp["scale"]
     bench = out["benchmark"] = {"eligible": False, "reasons": []}
@@ -354,9 +427,13 @@ def solve(inp, cfg=CONFIG):
         bench["reasons"].append("plan looks broken")
         out.update(status="skipped", reason=f"plan looks broken (area {inp['area_m2']:.1f} m2, scale {s:.1f} units/m)")
         return out, None
+    note("stage", stage="grid", msg="building the routing grid and the door / open-passage links")
     plan, grid, nb, kinds = build(inp, cfg)
     eligible = plan.device_rooms()
     out["links"] = [{"rooms": [a, b], "type": t} for (a, b), t in sorted(kinds.items())]
+    note("grid", h=cfg["grid_m"], xs=[r4(x) for x in grid.xs], ys=[r4(y) for y in grid.ys], points=int(grid.N),
+         free_points=int(grid.free.sum()), edges=int(grid.edge_ok.sum()), t=round(time.perf_counter() - t0, 3))
+    note("links", links=out["links"])
     if not eligible:
         bench["reasons"].append("no eligible rooms")
         out.update(status="skipped", reason="no eligible rooms")
@@ -370,6 +447,7 @@ def solve(inp, cfg=CONFIG):
         elif a < 2.0:
             out["warnings"].append(f"{r} ({plan.rooms[r].type}) is {a:.1f} m2 < 2 m2 (outside the organisers' benchmark)")
             bench["reasons"].append(f"{r} < 2 m2")
+    note("stage", stage="prep", msg=f"distance tables from {len(eligible)} devices (direction-aware Dijkstra)")
     prep = hr.prepare(plan, grid)
     for r, v in prep["devnode"].items():
         dx = math.hypot(grid.X[v] - plan.rooms[r].device[0], grid.Y[v] - plan.rooms[r].device[1])
@@ -390,13 +468,18 @@ def solve(inp, cfg=CONFIG):
         bench["reasons"].append(f"devices lie in {len(set(labels))} separate parts of the free space")
     bench["eligible"] = not bench["reasons"]
     t_prep = time.perf_counter() - t0
+    note("benchmark", **bench)
     deadline = t0 + cfg["time_budget_s"]
+    live = _live_emitter(emit, plan, grid, prep) if emit else None
     res, clearance = None, None
     for c in (cfg["hub_clearance_m"], 0.3, 0.1, 0.0):
-        res = hr.design(plan, grid, prep, clearance=c, deadline=deadline, max_routed=cfg["max_routed"])
+        note("stage", stage="zones", msg=f"zones and hub points (hub >= {c} m from walls)")
+        res = hr.design(plan, grid, prep, clearance=c, deadline=deadline, max_routed=cfg["max_routed"], emit=live)
         if res["k"] is not None:
             clearance = c
             break
+        note("log", msg=f"no design with hubs >= {c} m from walls; retrying with less clearance")
+    note("stage", stage="check", msg="rule checks and independent polyline check")
     out["solver"].update(grid_points=int(grid.N), prep_s=round(t_prep, 2), **{k: (bool(v) if isinstance(v, bool) else v)
                                                                              for k, v in res["stats"].items()})
     if res["k"] is None:

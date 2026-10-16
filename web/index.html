@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cable Ring Studio</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='3' y='3' width='26' height='26' rx='6' fill='%232e86ab'/%3E%3Cpath d='M9 9h14v14H9z' fill='none' stroke='white' stroke-width='2.4'/%3E%3Crect x='13' y='13' width='6' height='6' fill='white'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <svg viewBox="0 0 32 32" aria-hidden="true"><rect x="3" y="3" width="26" height="26" rx="6" class="logo-bg"/><path d="M9 9h14v14H9z" class="logo-ring"/><rect x="13" y="13" width="6" height="6" class="logo-hub"/></svg>
+    <div><strong>Cable Ring Studio</strong><span>HackHive control hub · ResPlan</span></div>
+  </div>
+  <nav class="tabs" role="tablist" aria-label="Views">
+    <button role="tab" id="tabbtn-viewer" aria-controls="tab-viewer" aria-selected="true" data-tab="viewer">Plan viewer</button>
+    <button role="tab" id="tabbtn-batch" aria-controls="tab-batch" aria-selected="false" data-tab="batch">Batch run <span id="batchDot" class="dot" hidden></span></button>
+  </nav>
+  <div id="serverStatus" class="status-pill" role="status">Connecting…</div>
+</header>
+
+<main>
+  <!-- ======================================================= plan viewer -->
+  <section id="tab-viewer" class="tab" role="tabpanel" aria-labelledby="tabbtn-viewer">
+    <aside class="sidebar" aria-label="Plans">
+      <div class="filters">
+        <div class="field-row">
+          <label>Split
+            <select id="fSplit">
+              <option value="">All 17,000</option>
+              <option value="test" selected>Test</option>
+              <option value="val">Validation</option>
+              <option value="train">Train</option>
+              <option value="augmented">Augmented</option>
+            </select>
+          </label>
+          <label>Result
+            <select id="fStatus">
+              <option value="">Any</option>
+              <option value="valid">Valid</option>
+              <option value="invalid">Invalid</option>
+              <option value="failed">Failed / error</option>
+              <option value="none">Not run yet</option>
+            </select>
+          </label>
+        </div>
+        <input id="fSearch" type="search" placeholder="Search plan id, e.g. 800" aria-label="Search plan id" autocomplete="off">
+        <div class="list-head"><span id="listCount">…</span><button id="btnRandom" class="ghost small" type="button">Random plan</button></div>
+      </div>
+      <ol id="planList" class="plan-list" aria-label="Plan list"></ol>
+    </aside>
+
+    <div class="workspace">
+      <div class="planbar">
+        <div class="plan-title">
+          <h1 id="planTitle">Choose a plan</h1>
+          <div id="planMeta" class="meta">Pick a plan on the left, then press <b>Run solver</b> to watch it being solved.</div>
+        </div>
+        <div class="controls">
+          <label class="compact">Rule 3
+            <select id="zone" title="How a zone's rooms must connect through doors / open passages">
+              <option value="any">Lenient: via any room</option>
+              <option value="excluded">Via rooms without a device</option>
+              <option value="own">Strict: own rooms only</option>
+            </select>
+          </label>
+          <div class="seg" id="speed" role="group" aria-label="Speed">
+            <button type="button" data-speed="instant" aria-pressed="false" title="Full speed (drawing thinned to ~25 updates/s)">Instant</button>
+            <button type="button" data-speed="watch" aria-pressed="true" title="Short pause after every leg">Watch</button>
+            <button type="button" data-speed="slow" aria-pressed="false" title="Long pause after every leg">Slow</button>
+          </div>
+          <button id="btnRun" class="primary" type="button" disabled>Run solver</button>
+          <button id="btnStop" class="ghost" type="button" disabled>Stop</button>
+          <button id="btnSave" class="ghost" type="button" disabled title="Write this live result to resplan_output (JSON + PNG)">Save</button>
+          <button id="btnJson" class="ghost" type="button" disabled title="Download the output JSON shown">JSON</button>
+        </div>
+      </div>
+
+      <ol class="stages" id="stages" aria-label="Solver stages"></ol>
+
+      <div class="panels">
+        <figure class="panel">
+          <figcaption><span class="cap-title">Input floor plan</span><span class="cap-hint">as given: rooms, walls, doors, windows (no devices)</span></figcaption>
+          <div class="canvas"><svg id="svgIn" role="img" aria-label="Input floor plan"></svg><div class="empty" id="emptyIn">No plan selected</div></div>
+          <div class="legend" id="legendIn"></div>
+        </figure>
+        <figure class="panel">
+          <figcaption><span class="cap-title">Output</span><span class="cap-hint" id="outCaption"></span></figcaption>
+          <div class="canvas"><svg id="svgOut" role="img" aria-label="Output floor plan with hubs and rings"></svg><div class="empty" id="emptyOut">No result yet</div><div class="live-badge" id="liveBadge" hidden><span></span>live</div></div>
+          <div class="legend" id="legendOut"></div>
+        </figure>
+      </div>
+
+      <div class="layerbar" role="group" aria-label="Layers">
+        <span class="muted">Show</span>
+        <label><input type="checkbox" id="lyLabels" checked> Room labels</label>
+        <label><input type="checkbox" id="lyGrid"> Grid lines</label>
+        <label><input type="checkbox" id="lyLinks"> Door links (rule 3)</label>
+        <label><input type="checkbox" id="lyOrder" checked> Visiting order</label>
+        <span class="muted hint-right">Scroll to zoom · drag to pan · double-click to reset (both panels move together)</span>
+      </div>
+
+      <div class="metrics" id="metrics"></div>
+
+      <div class="lower">
+        <section class="card">
+          <h2>Hubs and rings</h2>
+          <div class="table-wrap"><table id="hubTable" class="data"></table></div>
+          <div id="issues"></div>
+        </section>
+        <section class="card">
+          <div class="card-head"><h2>Live log</h2><button id="btnClearLog" class="ghost small" type="button">Clear</button></div>
+          <div id="log" class="log" aria-live="polite"></div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <!-- ======================================================= batch -->
+  <section id="tab-batch" class="tab" role="tabpanel" aria-labelledby="tabbtn-batch" hidden>
+    <div class="batch">
+      <section class="card batch-form">
+        <h2>Run many plans</h2>
+        <p class="muted">Same as <code>python run_resplan.py</code>: results go to <code id="outDir">resplan_output</code> (one JSON + one overlay PNG per plan). Plans already done are skipped unless you tick "Redo".</p>
+        <div class="form-grid">
+          <label>Plans
+            <select id="bMode">
+              <option value="first">First N plans</option>
+              <option value="split">A split</option>
+              <option value="sample">Random N plans</option>
+              <option value="ids">Chosen ids</option>
+              <option value="all">All 17,000</option>
+            </select>
+          </label>
+          <label data-for="first sample">N <input id="bN" type="number" min="1" value="20"></label>
+          <label data-for="sample">Seed <input id="bSeed" type="number" value="0"></label>
+          <label data-for="split">Split
+            <select id="bSplit"><option value="test">Test (1,632)</option><option value="val">Validation (1,632)</option><option value="train">Train (13,053)</option><option value="augmented">Augmented (683)</option></select>
+          </label>
+          <label data-for="ids" class="wide">Ids <input id="bIds" type="text" placeholder="800, 14433, 2401"></label>
+          <label>Workers <input id="bWorkers" type="number" min="1" value="14"></label>
+          <label>Rule 3
+            <select id="bZone"><option value="any">Lenient</option><option value="excluded">Via device-less rooms</option><option value="own">Strict</option></select>
+          </label>
+          <label class="check"><input type="checkbox" id="bPng" checked> Overlay PNGs</label>
+          <label class="check"><input type="checkbox" id="bForce"> Redo finished plans</label>
+        </div>
+        <div class="form-actions">
+          <button id="bStart" class="primary" type="button">Start batch</button>
+          <button id="bStop" class="ghost" type="button" disabled>Stop</button>
+          <span id="bMsg" class="muted"></span>
+        </div>
+      </section>
+
+      <section class="card batch-progress">
+        <div class="progress-head">
+          <h2 id="bTitle">No batch running</h2>
+          <span id="bRate" class="muted"></span>
+        </div>
+        <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="bBar"><span></span></div>
+        <div class="counters" id="bCounters"></div>
+        <div class="batch-charts">
+          <div><h3>Hubs per plan</h3><div id="bHubs" class="bars"></div></div>
+          <div><h3>J (cost) per plan</h3><div id="bJ" class="spark"></div></div>
+        </div>
+      </section>
+
+      <section class="card batch-table">
+        <div class="card-head"><h2>Results as they arrive</h2><span class="muted">click a row to open the plan</span></div>
+        <div class="table-wrap tall"><table class="data" id="bTable">
+          <thead><tr><th>Plan</th><th>Status</th><th>Benchmark</th><th>Hubs</th><th>J</th><th>Lower bound</th><th>Runtime</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </section>
+    </div>
+  </section>
+</main>
+
+<div id="tip" class="tip" role="tooltip" hidden></div>
+<div id="toast" class="toast" role="status" hidden></div>
+<script src="/app.js"></script>
+</body>
+</html>
