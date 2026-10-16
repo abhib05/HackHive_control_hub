@@ -30,9 +30,11 @@
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const fmt = (v, d = 2) => (v == null || Number.isNaN(+v) ? "—" : (+v).toFixed(d));
   const fmtInt = (v) => (v == null ? "—" : Number(v).toLocaleString());
-  const planId = (id) => "PLAN_" + String(id).padStart(6, "0");
+  const isImg = (id) => typeof id === "string" && id.startsWith("img-");
+  const planId = (id) => (isImg(id) ? "IMG_" + id.slice(4) : "PLAN_" + String(id).padStart(6, "0"));
   const plural = (n, one, many) => `${n} ${n === 1 ? one : (many || one + "s")}`;
-  const outName = () => String(S.outDir).split(/[\\/]/).filter(Boolean).pop() || "resplan_output";
+  const outName = () => (isImg(S.current) ? "image_output"
+    : String(S.outDir).split(/[\\/]/).filter(Boolean).pop() || "resplan_output");
   const P = (x, y) => `${+x.toFixed(4)},${+(-y).toFixed(4)}`;
   const pathOf = (polys) => {
     let d = "";
@@ -131,6 +133,36 @@
     r[5] = out.benchmark ? !!out.benchmark.eligible : null; r[6] = rm.hub_lower_bound ?? null;
   }
 
+  // ------------------------------------------------------------------ open a floor-plan image
+  async function openImage() {
+    const f = $("#imgFile").files[0], area = parseFloat($("#imgArea").value), msg = $("#imgMsg");
+    if (!f) { msg.textContent = "Choose an image file first."; return; }
+    if ($("#imgArea").value.trim() && !(area > 0)) { msg.textContent = "The floor area must be a number of m², or left empty."; return; }
+    msg.textContent = "Reading the image…";
+    $("#btnImg").disabled = true;
+    try {
+      const mode = $("#imgMode").value;
+      msg.textContent = mode === "colour" && area > 0 ? "Reading the image…" : "Reading the image (text recognition can take 10–30 s)…";
+      const r = await fetch(`/api/image?name=${encodeURIComponent(f.name)}&area=${area > 0 ? area : ""}&mode=${mode}`, { method: "POST", body: f });
+      const d = await r.json().catch(() => ({}));
+      if (!d.ok) { msg.textContent = d.msg || `Could not read the image (${r.status}).`; return; }
+      const i = d.info;
+      const found = Object.entries(i.rooms_found).filter(([, n]) => n).map(([t, n]) => `${n} ${t}`).join(", ");
+      const how = i.mode === "titles" ? `room names (${(i.titles || []).length} read)`
+        : i.mode === "legend" ? `the legend (${(i.legend || []).length} entries)`
+        : `the ${i.palette} colours (${Math.round(i.pixels_matched * 100)}% of pixels matched)`;
+      msg.textContent = `Read from ${how}: ${found || "no rooms"}; walls ${Math.round(i.wall_depth_m * 100)} cm; `
+        + `${fmt(i.scale_px_per_m, 1)} px/m`
+        + (i.area_labels ? ` from ${i.area_labels.length} area labels (floor ${fmt(i.area_m2, 1)} m²).` : ".")
+        + (i.warning ? " " + i.warning : "");
+      openPlan(d.id);
+    } catch (e) {
+      msg.textContent = "Upload failed: " + e.message;
+    } finally {
+      $("#btnImg").disabled = false;
+    }
+  }
+
   // ------------------------------------------------------------------ open a plan
   async function openPlan(id) {
     stopRun(true);
@@ -157,6 +189,7 @@
     const g = S.geo, elig = g.rooms.filter((r) => r.has_device).length;
     $("#planMeta").innerHTML = [
       d.split ? `<span class="badge">${esc(d.split)} split</span>` : "",
+      d.image ? `<span class="badge">image · ${esc(d.image.mode === "colour" ? d.image.palette + " colours" : d.image.mode)}</span>` : "",
       `${fmt(g.area_m2, 1)} m²`, `${g.rooms.length} rooms, ${elig} get a device`,
       `scale ${fmt(g.scale_units_per_m, 1)} units/m`, `wall ${fmt(g.wall_depth_m * 100, 0)} cm`,
       d.png ? `<a href="${esc(d.png)}" target="_blank" rel="noopener">overlay PNG</a>` : "",
@@ -875,6 +908,7 @@
       const nb = bs[Math.max(0, Math.min(bs.length - 1, i + (e.key === "ArrowDown" ? 1 : -1)))];
       nb.focus(); openPlan(+nb.dataset.id);
     });
+    $("#btnImg").addEventListener("click", openImage);
     $("#btnRandom").addEventListener("click", () => {
       const rows = filteredRows();
       if (rows.length) openPlan(rows[Math.floor(Math.random() * rows.length)][0]);

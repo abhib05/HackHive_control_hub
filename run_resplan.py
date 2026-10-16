@@ -12,8 +12,13 @@ cmd, from the project folder:
     python run_resplan.py --all --no-png            all 17,000 plans, JSON only
     python run_resplan.py --sample 500 --seed 0     random sample of plans
     python run_resplan.py --inputs DIR              plan input JSON files (*.json) instead of ResPlan.pkl
+    python run_resplan.py --image plan.png --area 95   a floor-plan image: colour-coded, with a legend, or with
+                                                    room titles (OCR); area = floor area inside the outer
+                                                    walls in m2 (optional if rooms carry area labels such as
+                                                    "17.0 m2"); output goes to image_output
 Options: --out DIR (default resplan_output)   --workers N (default: CPU cores - 2)   --no-png   --force
          --write-inputs (also save each plan's input JSON, devices included)   --zone any|excluded|own
+         --grid 0.2 (fast: coarser regular grid, corner lines kept)   --no-corner-lines
 Re-running skips plans whose JSON (and image, unless --no-png) already exist (resume); --force redoes them.
 Writes OUT/json/<plan_id>.json, OUT/png/<plan_id>.png, OUT/inputs/<plan_id>.json and OUT/summary.csv.
 """
@@ -46,16 +51,29 @@ def work(task):
     import resplan_solver as rs
     kind, payload, opts = task
     cfg = dict(rs.CONFIG, zone_mode=opts["zone"])
+    if opts.get("grid"):
+        cfg["grid_m"] = opts["grid"]
+    if opts.get("no_corner_lines"):
+        cfg["corner_lines_m"] = ()
+    if opts.get("full_room_area"):
+        cfg["room_area_cap_m2"] = None
     t0 = time.perf_counter()
     try:
         if kind == "file":
             inp = rs.load_input_json(payload, cfg)
             out, extras = rs.solve(inp, cfg)
+        elif kind == "image":
+            import image_input
+            path, area, palette, mode = payload
+            plan, info = image_input.plan_from_image(path, area, palette, mode=mode)
+            out, inp, extras = rs.solve_safe(plan, cfg)
+            out["image"] = info
         else:
             out, inp, extras = rs.solve_safe(payload, cfg)
     except Exception as e:                                        # noqa: BLE001
         out, inp, extras = {"plan_id": os.path.splitext(os.path.basename(str(payload)))[0] if kind == "file"
-                                       else plan_id_of(payload.get("id", 0)),
+                                       else "IMG_" + os.path.splitext(os.path.basename(payload[0]))[0]
+                                       if kind == "image" else plan_id_of(payload.get("id", 0)),
                             "units": "m", "hubs": [], "reported_metrics": {}, "status": "error",
                             "reason": f"{type(e).__name__}: {e}"}, None, None
     pid = out["plan_id"]
@@ -115,7 +133,7 @@ def report(rows):
         hubs = Counter(r["hubs"] for r in ok)
         print("Hubs per plan: " + ", ".join(f"{k} hubs: {v}" for k, v in sorted(hubs.items())))
         at_lb = sum(1 for r in ok if r["hubs"] == r["hub_lower_bound"])
-        print(f"Plans at the hub lower bound max(ceil(area/100), ceil(nodes/5)): {at_lb} of {len(ok)}")
+        print(f"Plans at the hub lower bound max(ceil(area/100), ceil(nodes/5)), at most one hub per room: {at_lb} of {len(ok)}")
         js = sorted(float(r["J"]) for r in ok)
         rt = sorted(float(r["runtime_s"] or 0) for r in ok)
         print(f"J: median {js[len(js) // 2]:.1f}, mean {sum(js) / len(js):.1f}   "
@@ -150,6 +168,13 @@ def main():
     sel.add_argument("--ids", help="comma-separated ResPlan ids")
     sel.add_argument("--sample", type=int, help="random sample of N plans")
     sel.add_argument("--inputs", help="folder of plan input JSON files")
+    sel.add_argument("--image", nargs="+", help="floor-plan image file(s) (PNG / JPG, colour-coded rooms)")
+    ap.add_argument("--area", type=float, nargs="+",
+                    help="with --image: floor area inside the outer walls in m2 (one value, or one per image); "
+                         "without it the scale is read from room area labels on the plan (OCR)")
+    ap.add_argument("--image-mode", default="auto", choices=["auto", "colour", "legend", "titles"],
+                    help="with --image: how room types are read (auto: colours, else a legend, else room titles)")
+    ap.add_argument("--palette", help="with --image: JSON file {\"#rrggbb\": \"bedroom\", ...} for the image's colours")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--pkl", default=os.path.join(HERE, "ResPlan.pkl"))
     ap.add_argument("--out", default=os.path.join(HERE, "resplan_output"))
@@ -161,17 +186,37 @@ def main():
     ap.add_argument("--force", action="store_true", help="redo plans whose JSON already exists")
     ap.add_argument("--zone", choices=["any", "excluded", "own"], default="any",
                     help="rule-3 reading: any = lenient (default, allowed by the user), own = strict")
+    ap.add_argument("--grid", type=float, default=None,
+                    help="regular grid spacing in m (default 0.1; 0.2 = fast: ~3x faster, J ~+0.04)")
+    ap.add_argument("--no-corner-lines", action="store_true",
+                    help="no extra grid lines at wall corners (faster, J ~+0.37)")
+    ap.add_argument("--full-room-area", action="store_true",
+                    help="rule 2 with full room areas (deck wording): a room > 100 m2 makes the plan invalid; "
+                         "default: a room counts at most 100 m2 towards its hub")
     a = ap.parse_args()
+    if a.image:
+        if a.area and len(a.area) not in (1, len(a.image)):
+            ap.error("--area: one value, or one per image (or none: the scale is read from room area labels)")
+        if a.out == os.path.join(HERE, "resplan_output"):
+            a.out = os.path.join(HERE, "image_output")
 
     for sub in ("json", "png", "inputs"):
         os.makedirs(os.path.join(a.out, sub), exist_ok=True)
-    opts = dict(out=a.out, png=a.png, write_inputs=a.write_inputs, zone=a.zone)
+    opts = dict(out=a.out, png=a.png, write_inputs=a.write_inputs, zone=a.zone, grid=a.grid,
+                no_corner_lines=a.no_corner_lines, full_room_area=a.full_room_area)
     stem = lambda p: os.path.splitext(os.path.basename(p))[0]
     done = set() if a.force else {stem(p) for p in glob.glob(os.path.join(a.out, "json", "*.json"))}
     if a.png:                                     # a plan without its overlay image is not done yet
         done &= {stem(p) for p in glob.glob(os.path.join(a.out, "png", "*.png"))}
     t0 = time.perf_counter()
-    if a.inputs:
+    if a.image:
+        import image_input
+        pal = image_input.load_palette(a.palette) if a.palette else None
+        areas = (a.area * len(a.image) if len(a.area) == 1 else a.area) if a.area else [None] * len(a.image)
+        tasks = [("image", (os.path.abspath(p), ar, pal, a.image_mode), opts) for p, ar in zip(a.image, areas)
+                 if "IMG_" + stem(p) not in done]
+        total = len(a.image)
+    elif a.inputs:
         files = sorted(glob.glob(os.path.join(a.inputs, "*.json")))
         tasks = [("file", p, opts) for p in files if os.path.splitext(os.path.basename(p))[0] not in done]
         total = len(files)

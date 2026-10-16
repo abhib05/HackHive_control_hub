@@ -35,6 +35,7 @@ def glabel(grouping):
 
 def main():
     t0 = time.perf_counter()
+    hr.HUB_PRUNE = False            # the stage-2 figure shows the ring cost at every legal hub point
     variant = sys.argv[sys.argv.index("--plan") + 1] if "--plan" in sys.argv else "traced"
     prefix = "example" if variant == "traced" else f"example_{variant}"
     plan = example_plan(variant)

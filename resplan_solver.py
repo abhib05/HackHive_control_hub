@@ -34,13 +34,19 @@ import hub_routing as hr
 
 CONFIG = dict(
     grid_m=0.1,               # regular grid spacing; extra grid lines go through every device point
+    corner_lines_m=(0.012,),  # extra lines this far either side of every wall / window / outline corner
+                              # (wires hug corners and door jambs: J -0.38 on 100 test plans); () = off
+    door_lines_m=(),          # the same for door corners only (cheaper, a little less gain)
     wire_clearance_m=0.01,    # wires stay this far from walls and windows (> the checker's 1 mm)
     hub_clearance_m=0.5,      # rule 6
     device_clearance_m=0.5,   # slide 2: device = interior point 0.5 m from walls
     zone_mode="any",          # rule 3: "any" (user decision: lenient allowed) | "excluded" | "own"  (see hub_routing.Plan)
     passage_factor=2.0,       # open passage = wall/window/door-free contact >= 2 x wall depth
     oversize_ok=True,         # an eligible room > 100 m2 still gets its own hub (design marked invalid)
+    room_area_cap_m2=100.0,   # rule 2 (user decision 2026-10-16): a room counts at most this much towards its hub,
+                              # so a hub may serve part of a room > 100 m2; None = full room area (deck wording)
     time_budget_s=90.0,       # after this, no further groupings are routed (best design so far is kept)
+    hard_limit_s=150.0,       # rip-up and reroute stops by then too (the best design found is kept)
     max_routed=40,            # at most this many groupings routed per plan
     broken_area_m2=15.0,      # plans smaller than this, or with scale > 60 units/m, are skipped
 )
@@ -319,11 +325,29 @@ def build(inp, cfg=CONFIG):
         rooms.append(hr.Room(r["room_id"], r["type"], to_m(r["poly"], s),
                              None if n is None else (n["x"] / s, n["y"] / s), None if n is None else n["node_id"]))
     plan = hr.Plan(rooms, to_m(union([inp["walls"], inp["windows"]]), s), outline=to_m(inp["inner"], s),
-                   neighbours=nb, zone_mode=cfg["zone_mode"], oversize_ok=cfg["oversize_ok"])
+                   neighbours=nb, zone_mode=cfg["zone_mode"], oversize_ok=cfg["oversize_ok"],
+                   area_cap=cfg.get("room_area_cap_m2"))
     devs = [plan.rooms[r].device for r in plan.device_rooms()]
-    grid = hr.Grid(plan, cfg["grid_m"], cfg["wire_clearance_m"],
-                   extra_x=[d[0] for d in devs], extra_y=[d[1] for d in devs])
+    sx, sy = [], []                     # optional lines: never closer than 5 mm to a device line
+    for off in cfg.get("corner_lines_m", ()):
+        # lines just off every wall / window / outline corner: wires can hug corners and door jambs
+        # (off = the wire clearance + a little), hubs can sit exactly 0.5 m from a wall (off = 0.5 + a little)
+        xs, ys = _corner_coords(union([plan.walls, plan.outline.boundary]))
+        sx += [x + k * off for x in xs for k in (-1, 1)]
+        sy += [y + k * off for y in ys for k in (-1, 1)]
+    for off in cfg.get("door_lines_m", ()):
+        xs, ys = _corner_coords(to_m(union(inp["doors"]), s))
+        sx += [x + k * off for x in xs for k in (-1, 1)]
+        sy += [y + k * off for y in ys for k in (-1, 1)]
+    grid = hr.Grid(plan, cfg["grid_m"], cfg["wire_clearance_m"], extra_x=[d[0] for d in devs],
+                   extra_y=[d[1] for d in devs], soft_x=sx, soft_y=sy)
     return plan, grid, nb, kinds
+
+
+def _corner_coords(g):
+    """Distinct x and y coordinates of all vertices of a geometry (metres, rounded to 0.1 mm)."""
+    pts = shapely.get_coordinates(g)
+    return np.unique(np.round(pts[:, 0], 4)), np.unique(np.round(pts[:, 1], 4))
 
 
 def _base_output(inp, cfg):
@@ -339,7 +363,9 @@ def _base_output(inp, cfg):
                   for n in inp["nodes"]],
         "devices": "given in the input" if inp.get("devices_given") else
                    "added by this pipeline: one per living room, bedroom, kitchen and storage room",
-        "solver": {k: cfg[k] for k in ("zone_mode", "grid_m", "hub_clearance_m", "wire_clearance_m")},
+        "solver": dict({k: cfg[k] for k in ("zone_mode", "grid_m", "hub_clearance_m", "wire_clearance_m")},
+                       corner_lines_m=list(cfg.get("corner_lines_m", ())),
+                       room_area_cap_m2=cfg.get("room_area_cap_m2")),
     }
 
 
@@ -429,6 +455,7 @@ def solve(inp, cfg=CONFIG, emit=None):
         return out, None
     note("stage", stage="grid", msg="building the routing grid and the door / open-passage links")
     plan, grid, nb, kinds = build(inp, cfg)
+    t_grid = time.perf_counter() - t0
     eligible = plan.device_rooms()
     out["links"] = [{"rooms": [a, b], "type": t} for (a, b), t in sorted(kinds.items())]
     note("grid", h=cfg["grid_m"], xs=[r4(x) for x in grid.xs], ys=[r4(y) for y in grid.ys], points=int(grid.N),
@@ -441,8 +468,13 @@ def solve(inp, cfg=CONFIG, emit=None):
     for r in eligible:
         a = plan.rooms[r].area
         if a > hr.MAX_AREA:
-            out["warnings"].append(f"{r} ({plan.rooms[r].type}) is {a:.1f} m2 > 100 m2: rule 2 cannot be met "
-                                   "(outside the organisers' benchmark)")
+            if cfg.get("room_area_cap_m2") is None:
+                out["warnings"].append(f"{r} ({plan.rooms[r].type}) is {a:.1f} m2 > 100 m2: rule 2 cannot be met "
+                                       "(outside the organisers' benchmark)")
+            else:
+                out["warnings"].append(f"{r} ({plan.rooms[r].type}) is {a:.1f} m2 > 100 m2: its hub serves "
+                                       f"{plan.room_area(r):.0f} m2 of it (capped room area; outside the organisers' "
+                                       "benchmark, whose checker may count the full room)")
             bench["reasons"].append(f"{r} > 100 m2")
         elif a < 2.0:
             out["warnings"].append(f"{r} ({plan.rooms[r].type}) is {a:.1f} m2 < 2 m2 (outside the organisers' benchmark)")
@@ -474,14 +506,16 @@ def solve(inp, cfg=CONFIG, emit=None):
     res, clearance = None, None
     for c in (cfg["hub_clearance_m"], 0.3, 0.1, 0.0):
         note("stage", stage="zones", msg=f"zones and hub points (hub >= {c} m from walls)")
-        res = hr.design(plan, grid, prep, clearance=c, deadline=deadline, max_routed=cfg["max_routed"], emit=live)
+        res = hr.design(plan, grid, prep, clearance=c, deadline=deadline, max_routed=cfg["max_routed"], emit=live,
+                        hard_deadline=t0 + cfg.get("hard_limit_s", 1e9))
         if res["k"] is not None:
             clearance = c
             break
         note("log", msg=f"no design with hubs >= {c} m from walls; retrying with less clearance")
     note("stage", stage="check", msg="rule checks and independent polyline check")
-    out["solver"].update(grid_points=int(grid.N), prep_s=round(t_prep, 2), **{k: (bool(v) if isinstance(v, bool) else v)
-                                                                             for k, v in res["stats"].items()})
+    out["solver"].update(grid_points=int(grid.N), grid_edges=int(grid.edge_ok.sum()), grid_s=round(t_grid, 3),
+                         prep_s=round(t_prep, 2),
+                         **{k: (bool(v) if isinstance(v, bool) else v) for k, v in res["stats"].items()})
     if res["k"] is None:
         out.update(status="failed", reason="no design could be routed (a device cannot be reached through doors "
                                            "or open passages, or no zone has a legal hub point)")
@@ -513,7 +547,9 @@ def solve(inp, cfg=CONFIG, emit=None):
                                "overlap_m": r4(m["O"]), "bends": int(m["B"]), "cost_J": r4(m["J"]),
                                "area_gap_m2": r4(res["gap"]), "lower_bound_J": r4(res["lb"]),
                                "hub_lower_bound": hr.hub_lower_bound(plan)}
+    t = time.perf_counter()
     chk = check_output(inp, out, nb, cfg)
+    out["solver"]["check_s"] = round(time.perf_counter() - t, 3)
     out["check"] = {k: chk[k] for k in ("L", "X", "O", "B", "J")}
     out["check"]["agrees_with_solver"] = bool(abs(chk["J"] - m["J"]) < 0.01 and chk["X"] == m["X"] and chk["B"] == m["B"])
     # violations = what the organisers' checker would see (polylines); grid-only findings listed apart
@@ -650,7 +686,8 @@ def check_output(inp, out, nb=None, cfg=CONFIG):
         for n in h["assigned_nodes"]:
             if n in node and node[n][2] not in rooms_h:
                 V.append((f"rule 1: {hid} serves {n} but not its room", gi, None))
-        area = sum(poly[r].area for r in rooms_h if r in poly)
+        cap = cfg.get("room_area_cap_m2")
+        area = sum(poly[r].area if cap is None else min(poly[r].area, cap) for r in rooms_h if r in poly)
         if len(h["assigned_nodes"]) > hr.MAX_DEVICES:
             V.append((f"rule 2: {hid} serves {len(h['assigned_nodes'])} nodes > 5", gi, None))
         if area > hr.MAX_AREA + 1e-6:
@@ -691,9 +728,34 @@ def check_output(inp, out, nb=None, cfg=CONFIG):
                 V.append((f"rule 4: {tag} runs through another hub or node point", gi, k))
             if abs(line.length - float(sg["length_m"])) > 0.01:
                 V.append((f"JSON: {tag} length_m {sg['length_m']} != polyline length {line.length:.3f}", gi, k))
+        if hr.NO_RETRACE:
+            back = ring_self_overlap(h)
+            if back > TOL:
+                V.append((f"rule 4: {hid} ring runs back along its own wire ({back:.3f} m)", gi, None))
     met = polyline_metrics(hubs, terminals)
     met["violations"] = V
     return met
+
+
+def ring_self_overlap(h):
+    """Length (m) a ring covers more than once, from its JSON polylines (NO_RETRACE: must be 0)."""
+    lines = defaultdict(list)
+    for sg in h["route_segments"]:
+        pl = [tuple(map(float, q)) for q in sg["polyline"]]
+        for a, b in zip(pl[:-1], pl[1:]):
+            d = _dir(a, b)
+            if d in (0, 2):
+                lines[("H", round(a[1] / TOL))].append((min(a[0], b[0]), max(a[0], b[0])))
+            elif d in (1, 3):
+                lines[("V", round(a[0] / TOL))].append((min(a[1], b[1]), max(a[1], b[1])))
+    o = 0.0
+    for ivs in lines.values():
+        depth, prev = 0, None
+        for x, e in sorted([(lo, 1) for lo, _ in ivs] + [(hi, -1) for _, hi in ivs]):
+            if prev is not None and depth > 1:
+                o += (depth - 1) * (x - prev)
+            depth, prev = depth + e, x
+    return o
 
 
 # --------------------------------------------------------------------------- overlay (drawn from the JSON)

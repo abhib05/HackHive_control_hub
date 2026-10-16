@@ -47,6 +47,25 @@
         </div>
         <input id="fSearch" type="search" placeholder="Search plan id, e.g. 800" aria-label="Search plan id" autocomplete="off">
         <div class="list-head"><span id="listCount">…</span><button id="btnRandom" class="ghost small" type="button">Random plan</button></div>
+        <details class="imgbox">
+          <summary>Open a floor-plan image</summary>
+          <label>Image (PNG / JPG)
+            <input id="imgFile" type="file" accept="image/png,image/jpeg,image/bmp">
+          </label>
+          <label>Floor area inside the outer walls (m²), optional
+            <input id="imgArea" type="number" min="1" max="5000" step="0.1" placeholder="empty: read from room area labels">
+          </label>
+          <label>How room types are shown
+            <select id="imgMode">
+              <option value="auto" selected>Find out (colours, legend or titles)</option>
+              <option value="colour">Room colours</option>
+              <option value="legend">Legend with colour swatches</option>
+              <option value="titles">Room names written in the rooms</option>
+            </select>
+          </label>
+          <button id="btnImg" class="ghost small" type="button">Read image and open it</button>
+          <div id="imgMsg" class="img-msg" role="status"></div>
+        </details>
       </div>
       <ol id="planList" class="plan-list" aria-label="Plan list"></ol>
     </aside>
@@ -169,7 +188,7 @@
       <section class="card batch-table">
         <div class="card-head"><h2>Results as they arrive</h2><span class="muted">click a row to open the plan</span></div>
         <div class="table-wrap tall"><table class="data" id="bTable">
-          <thead><tr><th>Plan</th><th>Status</th><th>Benchmark</th><th>Hubs</th><th>J</th><th>Lower bound</th><th>Runtime</th><th></th></tr></thead>
+          <thead><tr><th>Plan</th><th>Status</th><th>Benchmark</th><th class="num">Hubs</th><th class="num">J</th><th class="num">Lower bound</th><th class="num">Runtime</th><th></th></tr></thead>
           <tbody></tbody>
         </table></div>
       </section>

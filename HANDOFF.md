@@ -21,11 +21,18 @@ Ranking is fewest hubs first, then lowest **J = L + 5X + O + 0.5B**. The whole p
 
 ### Git
 
-- `main` holds 3 commits, all pushed by the user:
+- `main` holds 5 commits, all pushed to GitHub:
   - `5620283`: the solver
   - `7cc1df3`: an overlay PNG for every plan by default
   - `519e344`: the rip-up and reroute step
-- **Uncommitted** (the user asked not to commit yet; they want to try the web app first):
+  - `e33ec8a`: the web app, live solver events, greedy hub relocation
+  - `03f1780`: handoff notes, conversation log and the intermediate-update deck
+- **Working branch `solver-optimization`** (local, uncommitted): the optimisation work, see `OPTIMIZATION_REPORT.md` and CONVERSATION_LOG entry 22.
+  - Modified: `hub_routing.py` (guided exact searches, sparse penalties, pruned hub scan, faster grid build, soft corner lines that never move device lines, stage timings/counters, optional ring/segment/kick moves off by default, hard deadline), `resplan_solver.py` (corner lines on by default, `hard_limit_s`, timings in the JSON), `run_example.py` (full hub map for its figure), `run_resplan.py` (`--grid`, `--no-corner-lines`), `web_app.py` (slow speeds lift the hard limit), `web/index.html` (batch results table: number columns right-aligned), `README.md`, `CLAUDE.md`, `.gitignore` (`bench_results/`). `example_final_cables.png` and `example_solution.json` were regenerated (same J 53.68).
+  - New: `bench_solver.py`, `bench_sets.json`, `tests/test_solver.py` (17 tests now, all pass), `OPTIMIZATION_REPORT.md` (results still being written).
+  - Image input (log entry 44, done and tested): new `image_input.py` (colour-coded floor-plan image -> ResPlan-style plan, then the normal pipeline; cv2 + rasterio), `sample_images/` (5 PNGs: colour, legend, room-title drawings, one with area labels), `run_resplan.py --image/--area/--palette/--image-mode`, OCR via Tesseract (entry 45), floor area optional: scale from room area labels when not given (entry 48), web app upload (`web_app.py`, `web/app.js`, `web/index.html`, `web/style.css`), output in `image_output/` (git-ignored). Tests: 17, all pass.
+  - Also untracked: `Cable Ring Challenge - Intermediate Update Template.pptx` (the organisers' blank template, copied into the folder at 22:03; our filled deck is the `- HackHive.pptx` one).
+- The table below lists what went into `e33ec8a` / `03f1780` (all committed now):
 
 | File | State | What changed |
 |---|---|---|
@@ -37,9 +44,11 @@ Ranking is fewest hubs first, then lowest **J = L + 5X + O + 0.5B**. The whole p
 | `Cable Ring Challenge - Intermediate Update - HackHive.pptx` | new | The filled 3-slide intermediate update. **The team-members field still needs names**, and the team name "HackHive" was inferred from the repo name. |
 | `HANDOFF.md` | new | This file. |
 
-### Results (test split, 1,632 plans; `resplan_output/`, 1,633 JSON + 1,633 PNG)
+### Results (test split, 1,632 plans; `resplan_output/`, about 1,643 JSON + PNG)
 
-The extra file is PLAN_014433, which is not in the test split and still holds a result from before rip-up.
+These figures are from the **old (committed) solver**. About 20 plans have since been re-solved with the new code (the first 10 plans and the random-10 seed-0 sample, from the CLI and the web app's batch tab), so `resplan_output` is mixed until the test split is re-run with `--force`.
+
+**Rule 2 change (2026-10-16, user decision, uncommitted):** a room over 100 m² now counts 100 m² towards its hub (`--full-room-area` = old rule), and the hub lower bound is capped at the number of rooms (bug that made 3 plans "failed"). The 51 invalid/failed plans were re-run: 47 are now valid; left: PLAN_013607 (rooms outside the outline), PLAN_003931 (rule 4), PLAN_011279 and PLAN_016612 (rule 6). Benchmark plans are unaffected (no room over 100 m²). Also untracked: `Cable Ring Challenge - Intermediate Update Template.pptx` (organisers' blank template, copied from Downloads). New untracked `image_input.py` and `image_output/` (from another session; not reviewed here). About 2,164 plans now have results (more batches run from the web app): 77 not valid, none in the benchmark; 78 of 466 augmented plans are invalid because their outline was not rotated with the rooms (log entry 41).
 
 - 1,586 valid, 43 invalid, 3 failed. **All 1,516 plans inside the organisers' benchmark filters are valid.**
 - The 46 non-valid plans are all outside the benchmark: 42 have a room over 100 m² (rule 2 impossible), and 4 have a sliver room or an unreachable device.
@@ -132,12 +141,11 @@ Other behaviour:
 
 ## 6. Exact next steps, in order
 
-1. **User:** try the web app.
-   ```
-   cd /d "C:\Users\abhin\OneDrive\Desktop\Honeywell_hackathon"
-   python web_app.py
-   ```
-   Then commit everything listed in section 2 when happy (no Claude trailer). Suggested message: "Cable Ring Studio web app: live solver view and batch runs".
+0. **For the judges' presentation (next day):** re-run the test split with the current code (`python run_resplan.py --split test --force`, about 15 min) and take the metrics from its summary (log entry 39). Restart the web app afterwards, since it only loads results at start-up.
+0a. **No retracing (log entry 50, uncommitted):** `hub_routing.NO_RETRACE = True`: a ring never uses a line twice (one-device rings are small rectangles); val100: all valid, same hubs, J +0.48. Stored results in `resplan_output` predate it: re-run the test split (`python run_resplan.py --split test --force`).
+0b. **Image input (new, uncommitted):** `image_input.py`, `run_resplan.py --image ... --area ...`, web app upload; output in `image_output\`. OCR for room titles and legends added (log entry 45; Tesseract installed on this laptop; another computer needs it installed too).
+0c. **Augmented-outline repair** (log entry 43): asked for, then stopped before coding; build it, add an outline check to the benchmark flag, re-run the augmented split.
+1. **Finish the optimisation** (branch `solver-optimization`): the re-run of the final paired benchmark is complete (`bench_results\final2_*.jsonl`; print with `python bench_solver.py --summary <file>`; `final_*` is the first run, before the device-line fix): fill in `OPTIMIZATION_REPORT.md`, then the user decides on the default grid and whether to commit / merge (no Claude trailer). Tests: `python -m pytest tests -q`. Afterwards re-run the test split (`python run_resplan.py --split test --force`) so `resplan_output` matches the new solver (it is now mixed old/new). The new code was spot-checked on the first 10 plans and in the web app (log entry 26): all fine.
 2. **User:** fill in the team members (and the team name, if it isn't HackHive) on slide 1 of the intermediate-update deck.
 3. **User:** run all 17,000 plans (about 3 h on 14 cores), then check that every benchmark plan is valid:
    ```
@@ -149,9 +157,8 @@ Other behaviour:
    - any time limit per plan,
    - confirmation of our readings: lenient rule 3, X once per point including touches, a hub next to its only device.
    When the sample arrives, write an adapter in `resplan_solver.load_input_json`.
-5. **Stage-by-stage algorithm review with the user** (in progress): stage 1 kept (exact depth-first search); stage 2 kept exhaustive (greedy was worse in 28 of 100 plans). **User to decide:** keep greedy hub relocation on (J lower in 3 of 100 plans, mean −0.013, never higher, small runtime cost) or set `HUB_MOVES = False`. Next: stage 3 (ring routing).
-6. **Close the J gap:** the gap is in the device-to-device legs, not the hub point (hub legs carry only about 0.5 of it per ring).
-   - Visiting-order swaps after routing.
+5. **Stage-by-stage algorithm review with the user**: stage 1 kept (exact depth-first search); stage 2 kept exhaustive (greedy was worse in 28 of 100 plans). **User to decide:** keep greedy hub relocation on (J lower in 3 of 100 plans, mean −0.013, never higher, small runtime cost) or set `HUB_MOVES = False`. Stage 3 was covered by the optimisation work (entry 22 of the log).
+6. **Close the J gap:** the gap is in the device-to-device legs, not the hub point (hub legs carry only about 0.5 of it per ring). Already tried and left off: whole-ring re-routing in other orders, 3-leg segment moves, kick moves, wider rip-up (at most −0.008 J). The grid (corner lines) was the lever that worked.
    - A tighter lower bound that charges one-door rooms their extra bend.
    - Measure each change on the test split; it must never raise J or change status.
 7. **Cut the runtime tail:**

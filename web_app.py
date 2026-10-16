@@ -9,6 +9,8 @@ cmd, from the project folder:
     python web_app.py --port 9000 --no-browser
 Batch runs write to resplan_output exactly like run_resplan.py (one JSON + one overlay PNG per plan).
 A single live run is only written there when you press Save.
+Floor-plan images (colour-coded PNG / JPG, see image_input.py) can be opened from the sidebar with their floor
+area in m2; they are solved like any plan and saved to image_output.
 """
 import argparse
 import csv
@@ -36,6 +38,8 @@ SPEEDS = {"instant": 0.0, "watch": 0.05, "slow": 0.25}          # seconds of pau
 MIME = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
         ".css": "text/css; charset=utf-8", ".png": "image/png", ".svg": "image/svg+xml", ".ico": "image/x-icon"}
 STORE = BATCH = None                                             # set in main(); worker processes never load the data
+IMG_OUT = os.path.join(HERE, "image_output")
+MAX_UPLOAD = 25 * 2 ** 20
 
 
 class ClientGone(Exception):
@@ -65,6 +69,7 @@ class Store:
         self.pkl, self.out = pkl, out
         self.ready, self.error, self.load_s = threading.Event(), None, None
         self.plans, self.order, self.split, self.results, self.recent = {}, [], {}, {}, {}
+        self.images = {}                  # "img-<name>" -> (ResPlan-style plan dict, image info) of uploaded images
         self.lock = threading.Lock()
         threading.Thread(target=self._load, daemon=True).start()
 
@@ -133,8 +138,25 @@ class Store:
         return out
 
 
+def is_img(pid):
+    return isinstance(pid, str) and pid.startswith("img-")
+
+
+def pid_of(q):
+    v = q.get("id", "-1")
+    return v if is_img(v) else int(v)
+
+
+def stem_of(pid):
+    return "IMG_" + pid[4:] if is_img(pid) else rr.plan_id_of(pid)
+
+
+def out_of(pid):
+    return IMG_OUT if is_img(pid) else STORE.out
+
+
 def read_output(pid):
-    path = os.path.join(STORE.out, "json", f"{rr.plan_id_of(pid)}.json")
+    path = os.path.join(out_of(pid), "json", f"{stem_of(pid)}.json")
     if not os.path.exists(path):
         return None
     with open(path, encoding="utf-8") as f:
@@ -142,8 +164,16 @@ def read_output(pid):
 
 
 def png_url(pid):
-    path = os.path.join(STORE.out, "png", f"{rr.plan_id_of(pid)}.png")
-    return f"/png/{rr.plan_id_of(pid)}.png?v={int(os.path.getmtime(path))}" if os.path.exists(path) else None
+    path = os.path.join(out_of(pid), "png", f"{stem_of(pid)}.png")
+    route = "imgpng" if is_img(pid) else "png"
+    return f"/{route}/{stem_of(pid)}.png?v={int(os.path.getmtime(path))}" if os.path.exists(path) else None
+
+
+def get_plan(pid):
+    if is_img(pid):
+        got = STORE.images.get(pid)
+        return got[0] if got else None
+    return STORE.plans.get(pid)
 
 
 # --------------------------------------------------------------------------- live run of one plan
@@ -171,19 +201,21 @@ class Live:
 
 def api_solve(h, q):
     STORE.ready.wait()
-    pid, zone, speed = int(q.get("id", -1)), q.get("zone", "any"), q.get("speed", "instant")
+    pid, zone, speed = pid_of(q), q.get("zone", "any"), q.get("speed", "instant")
     cfg = dict(rs.CONFIG, zone_mode=zone if zone in ("any", "excluded", "own") else "any")
     delay = SPEEDS.get(speed, 0.0)
     if delay:
         cfg["time_budget_s"] = 1e9          # watching slowly must not change the result (90 s budget)
+        cfg["hard_limit_s"] = 1e9
     h.sse_open()
     live = Live(h, delay)
     try:
-        p = STORE.plans.get(pid)
+        p = get_plan(pid)
         if p is None:
-            live("fail", {"msg": f"plan {pid} is not in ResPlan.pkl"})
+            live("fail", {"msg": f"plan {pid} is not loaded (open the image again)" if is_img(pid)
+                          else f"plan {pid} is not in ResPlan.pkl"})
             return
-        live("start", {"id": pid, "plan_id": rr.plan_id_of(pid), "zone": cfg["zone_mode"], "speed": speed})
+        live("start", {"id": pid, "plan_id": stem_of(pid), "zone": cfg["zone_mode"], "speed": speed})
         live("stage", {"stage": "plan", "msg": "reading the plan, drawing units -> metres"})
         inp = rs.from_resplan(p, cfg)
         geo = rs.plan_geometry(inp)
@@ -193,6 +225,8 @@ def api_solve(h, q):
                                                   "storage room"})
         live("devices", {"nodes": nodes, "warnings": inp["warnings"]})
         out, extras = rs.solve(inp, cfg, emit=live)
+        if is_img(pid):
+            out["image"] = STORE.images[pid][1]
         STORE.remember(pid, cfg["zone_mode"], inp, out, extras)
         live("result", {"out": out, "png": png_url(pid)})
     except ClientGone:
@@ -206,23 +240,26 @@ def api_solve(h, q):
 
 def api_save(h, q):
     """Write the last live result of a plan (JSON + overlay PNG) into resplan_output, like run_resplan.py."""
-    pid, zone = int(q.get("id", -1)), q.get("zone", "any")
+    pid, zone = pid_of(q), q.get("zone", "any")
     with STORE.lock:
         got = STORE.recent.get((pid, zone))
     if got is None:
         return h.send_json({"ok": False, "msg": "run the solver on this plan first"}, 404)
     inp, out, extras = got
+    od = out_of(pid)
     for sub in ("json", "png"):
-        os.makedirs(os.path.join(STORE.out, sub), exist_ok=True)
+        os.makedirs(os.path.join(od, sub), exist_ok=True)
     stem = out["plan_id"]
-    with open(os.path.join(STORE.out, "json", f"{stem}.json"), "w", encoding="utf-8") as f:
+    with open(os.path.join(od, "json", f"{stem}.json"), "w", encoding="utf-8") as f:
         json.dump(out, f, indent=1)
     try:
-        rs.draw_overlay(inp, out, os.path.join(STORE.out, "png", f"{stem}.png"), (extras or {}).get("chk"))
+        rs.draw_overlay(inp, out, os.path.join(od, "png", f"{stem}.png"), (extras or {}).get("chk"))
     except Exception as e:                                        # noqa: BLE001
         return h.send_json({"ok": False, "msg": f"JSON saved, overlay failed: {e}"})
-    STORE.update(rr.summary_row(out))
-    h.send_json({"ok": True, "msg": f"saved resplan_output/json/{stem}.json and png/{stem}.png", "png": png_url(pid)})
+    if not is_img(pid):
+        STORE.update(rr.summary_row(out))
+    name = os.path.basename(od)
+    h.send_json({"ok": True, "msg": f"saved {name}/json/{stem}.json and png/{stem}.png", "png": png_url(pid)})
 
 
 # --------------------------------------------------------------------------- batch runs
@@ -360,10 +397,11 @@ def api_plans(h, q):
 def api_plan(h, q):
     """Input geometry (no devices: the plans have none), door / open-passage links and the stored result."""
     STORE.ready.wait()
-    pid = int(q.get("id", -1))
-    p = STORE.plans.get(pid)
+    pid = pid_of(q)
+    p = get_plan(pid)
     if p is None:
-        return h.send_json({"error": f"plan {pid} is not in ResPlan.pkl"}, 404)
+        return h.send_json({"error": f"plan {pid} is not loaded (open the image again)" if is_img(pid)
+                            else f"plan {pid} is not in ResPlan.pkl"}, 404)
     try:
         inp = rs.from_resplan(p, rs.CONFIG, nodes=[])
     except Exception as e:                                        # noqa: BLE001
@@ -372,9 +410,45 @@ def api_plan(h, q):
     x1, y1, x2, y2 = inp["inner"].bounds
     _, kinds = rs.room_links(inp["rooms"], inp["doors"], inp["walls"], inp["windows"], inp["wall_depth"],
                              max(x2 - x1, y2 - y1), rs.CONFIG["passage_factor"])
-    h.send_json({"id": pid, "split": STORE.split.get(pid), "geometry": geo,
+    h.send_json({"id": pid, "split": None if is_img(pid) else STORE.split.get(pid), "geometry": geo,
+                 "image": STORE.images[pid][1] if is_img(pid) else None,
                  "links": [{"rooms": [a, b], "type": t} for (a, b), t in sorted(kinds.items())],
                  "stored": read_output(pid), "png": png_url(pid)})
+
+
+def api_image(h, q):
+    """POST body = the image file; ?name=<file name>&area=<m2>. Reads it (image_input.plan_from_image) and keeps
+    the plan as id "img-<name>" for /api/plan, /api/solve and /api/save."""
+    import re
+    import image_input
+    area = None
+    if q.get("area", "").strip():
+        try:
+            area = float(q["area"])
+            if not 1 <= area <= 5000:
+                raise ValueError
+        except ValueError:
+            return h.send_json({"ok": False, "msg": "the floor area must be a number of m2 (e.g. 95), or empty"}, 400)
+    n = int(h.headers.get("Content-Length") or 0)
+    if not 0 < n <= MAX_UPLOAD:
+        return h.send_json({"ok": False, "msg": "no image received, or larger than 25 MB"}, 400)
+    body = h.rfile.read(n)
+    base = re.sub(r"[^A-Za-z0-9_-]+", "_", os.path.splitext(os.path.basename(q.get("name", "plan")))[0])[:60] or "plan"
+    ext = os.path.splitext(q.get("name", ""))[1].lower()
+    ext = ext if ext in (".png", ".jpg", ".jpeg", ".bmp") else ".png"
+    os.makedirs(os.path.join(IMG_OUT, "uploads"), exist_ok=True)
+    path = os.path.join(IMG_OUT, "uploads", base + ext)
+    with open(path, "wb") as f:
+        f.write(body)
+    try:
+        mode = q.get("mode", "auto") if q.get("mode") in ("auto", "colour", "legend", "titles") else "auto"
+        plan, info = image_input.plan_from_image(path, area, plan_id="IMG_" + base, mode=mode)
+    except Exception as e:                                        # noqa: BLE001
+        return h.send_json({"ok": False, "msg": f"could not read the image: {e}"}, 422)
+    pid = "img-" + base
+    with STORE.lock:
+        STORE.images[pid] = (plan, info)
+    h.send_json({"ok": True, "id": pid, "info": info})
 
 
 def api_batch_start(h, q):
@@ -390,7 +464,7 @@ def api_batch_stop(h, q):
 
 ROUTES = {"/api/status": api_status, "/api/plans": api_plans, "/api/plan": api_plan, "/api/solve": api_solve,
           "/api/save": api_save, "/api/batch/start": api_batch_start, "/api/batch/stop": api_batch_stop,
-          "/api/batch/events": api_batch_events}
+          "/api/batch/events": api_batch_events, "/api/image": api_image}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -407,6 +481,8 @@ class Handler(BaseHTTPRequestHandler):
                 return ROUTES[u.path](self, q)
             if u.path.startswith("/png/"):
                 return self.send_file(os.path.join(STORE.out, "png", os.path.basename(u.path)))
+            if u.path.startswith("/imgpng/"):
+                return self.send_file(os.path.join(IMG_OUT, "png", os.path.basename(u.path)))
             name = "index.html" if u.path in ("/", "") else u.path.lstrip("/")
             path = os.path.normpath(os.path.join(WEB, name))
             if not path.startswith(WEB + os.sep):

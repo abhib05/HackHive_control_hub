@@ -11,3 +11,9 @@ __pycache__/
 
 # Local tool settings
 .claude/
+
+# Benchmark run results (bench_solver.py)
+bench_results/
+
+# Image runs (run_resplan.py --image, web app uploads)
+image_output/
