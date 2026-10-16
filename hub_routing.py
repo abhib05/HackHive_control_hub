@@ -26,7 +26,8 @@ Pipeline:
   stage 2  per group: exact ring cost L + 0.5B at every legal hub vertex (best visiting order, turns
            at hub/nodes included, other wires ignored) -> best hub; this is a lower bound on J
   stage 3  route each ring leg by leg with overlap/crossing penalties for every visiting order; orders
-           and groupings whose lower bound cannot beat the best J found are skipped
+           and groupings whose lower bound cannot beat the best J found are skipped; then rip-up and
+           reroute of the best designs (each leg, and each node's two legs, against all other wires)
   stage 4  exact J per routed grouping, pick the lowest (then smallest area gap), validate rules 1-6
 """
 import itertools
@@ -48,6 +49,7 @@ MAX_DEVICES, MAX_AREA = 5, 100.0
 HUB_WALL_CLEARANCE = 0.5
 BLOCKED = 1e6          # cost of running through another hub or node point (rule 4)
 LB_SLACK = 1e-3        # float32 distance tables: keep pruning on the safe side
+IMPROVE_TOP, IMPROVE_MARGIN, IMPROVE_TIME_S = 3, 2.5, 30.0   # rip-up and reroute: designs, J window, time cap
 
 # direction codes: 0 = +x (E), 1 = +y (N), 2 = -x (W), 3 = -y (S)
 OPP = np.array([2, 3, 0, 1])
@@ -587,6 +589,15 @@ def _cost_to_go(F, hub, order, j, d0):
     return C
 
 
+def _leg_limit(F, a, b):
+    """Search radius for a leg a -> b: 1.5 x its unhindered cost + 12 (route() re-runs unbounded if the
+    end is not clearly inside, so this only saves time). Needs the distance table of a or b."""
+    if F is None:
+        return np.inf
+    n, m = (b, a) if b in F else (a, b)
+    return 1.5 * float(F[n][:, m, :].min()) + 12.0 if n in F else np.inf
+
+
 def sequential_loop(grid, hub, order, base_loops, terminals=None, penalise=True, F=None, base_usage=None):
     """Route the ring leg by leg in visiting order. With penalise, every leg pays the exact J increase
     it causes against the wires already routed (overlap 1/m, crossing 5, see _penalised_graph). Turns
@@ -601,13 +612,10 @@ def sequential_loop(grid, hub, order, base_loops, terminals=None, penalise=True,
         G = _penalised_graph(grid, usage, b, terminals) if penalise else grid.G0
         src = grid.last_dir(legs[-1]) if legs else None
         nxt = grid.first_dir(legs[0]) if i == len(pairs) - 1 else None
-        end, limit = None, np.inf
-        if F is not None:
-            n, m = (b, a) if b in F else (a, b)
-            if n in F:
-                limit = 1.5 * float(F[n][:, m, :].min()) + 12.0
-            if i < len(pairs) - 1:
-                end = _cost_to_go(F, hub, order, i, grid.first_dir(legs[0]) if legs else None)
+        end = None
+        if F is not None and i < len(pairs) - 1:
+            end = _cost_to_go(F, hub, order, i, grid.first_dir(legs[0]) if legs else None)
+        limit = _leg_limit(F, a, b)
         leg = grid.route(G, a, b, src, nxt, end, limit) or grid.route(G, a, b, None, nxt, end)
         if leg is None:
             return None
@@ -638,6 +646,81 @@ def best_order_loop(grid, hub, devs, base_loops, terminals=None, perm_lb=None, F
     return best
 
 
+def _usage_without(grid, loops, skip):
+    """Usage of every leg except the (ring index, leg index) pairs in skip."""
+    u = Usage(grid)
+    for r, loop in enumerate(loops):
+        for i, leg in enumerate(loop["legs"]):
+            if (r, i) not in skip:
+                u.add(leg)
+    return u
+
+
+def improve_rings(grid, loops, terminals=None, F=None, max_rounds=5, deadline=None):
+    """Rip-up and reroute after stage 3. Stage 3 routes a ring's legs one after another (and rings one
+    after another), so early legs never see the wires routed after them. Two moves, repeated until a
+    round changes nothing:
+      leg   re-route one leg against all other wires, turns at both ends charged;
+      pair  re-route the two legs at a node in reverse order: the outgoing leg first, then the incoming
+            one against it (frees the line the incoming leg took into a dead-end room).
+    A change is kept only if the exact J of the whole design drops, so J never increases."""
+    if terminals is None:
+        terminals = np.array(sorted({l["hub"] for l in loops} | {n for l in loops for n in l["order"]}))
+    loops = [dict(l, legs=list(l["legs"])) for l in loops]
+    J = measure(grid, loops, terminals)["J"]
+
+    def keep(r, legs):
+        nonlocal loops, J
+        cand = loops[:r] + [dict(loops[r], legs=legs)] + loops[r + 1:]
+        Jn = measure(grid, cand, terminals)["J"]
+        if Jn < J - 1e-9:
+            loops, J = cand, Jn
+            return True
+        return False
+
+    def late():
+        return deadline is not None and time.perf_counter() > deadline
+
+    for _ in range(max_rounds):
+        better = False
+        for r in range(len(loops)):
+            for i in range(len(loops[r]["legs"])):
+                if late():
+                    return loops
+                legs = loops[r]["legs"]
+                n, (a, b) = len(legs), (legs[i][0], legs[i][-1])
+                G = _penalised_graph(grid, _usage_without(grid, loops, {(r, i)}), b, terminals)
+                new = grid.route(G, a, b, grid.last_dir(legs[i - 1]), grid.first_dir(legs[(i + 1) % n]),
+                                 limit=_leg_limit(F, a, b))
+                if new is not None and new != legs[i]:
+                    better |= keep(r, legs[:i] + [new] + legs[i + 1:])
+        for r in range(len(loops)):
+            for i in range(len(loops[r]["legs"])):
+                if late():
+                    return loops
+                legs = loops[r]["legs"]
+                n, j = len(legs), (i + 1) % len(legs)
+                a, b, c = legs[i][0], legs[i][-1], legs[j][-1]
+                usage = _usage_without(grid, loops, {(r, i), (r, j)})
+                after = grid.first_dir(legs[(j + 1) % n]) if n > 2 else None    # n = 2: that leg is legs[i]
+                out = grid.route(_penalised_graph(grid, usage, c, terminals), b, c, None, after,
+                                 limit=_leg_limit(F, b, c))
+                if out is None:
+                    continue
+                usage.add(out)
+                before = grid.last_dir(legs[i - 1]) if n > 2 else grid.last_dir(out)
+                inn = grid.route(_penalised_graph(grid, usage, b, terminals), a, b, before, grid.first_dir(out),
+                                 limit=_leg_limit(F, a, b))
+                if inn is None or (inn == legs[i] and out == legs[j]):
+                    continue
+                trial = list(legs)
+                trial[i], trial[j] = inn, out
+                better |= keep(r, trial)
+        if not better:
+            break
+    return loops
+
+
 def route_rings(grid, evs, prep=None):
     """Stage 3 (method 3): for each hub in turn, route its ring sequentially with overlap/crossing
     penalties for every visiting order and keep the order with the lowest exact J, counting
@@ -657,8 +740,8 @@ def route_rings(grid, evs, prep=None):
 def design(plan, grid, prep, clearance=HUB_WALL_CLEARANCE, max_k=None, log=None, deadline=None, max_routed=None):
     """Fewest hubs first, then lowest J, then smallest area gap. Groupings are routed in order of their
     lower bound; routing stops once the bound exceeds the best J, or (keeping the best design found)
-    at the deadline (time.perf_counter() value) or after max_routed groupings. k is None if nothing
-    could be routed."""
+    at the deadline (time.perf_counter() value) or after max_routed groupings. The best few routed
+    designs then go through improve_rings (rip-up and reroute). k is None if nothing could be routed."""
     rooms = plan.device_rooms()
     blocks = feasible_blocks(plan)
     cache = {}
@@ -694,8 +777,25 @@ def design(plan, grid, prep, clearance=HUB_WALL_CLEARANCE, max_k=None, log=None,
         if log:
             log(f"{k} hubs: {len(gs)} groupings, {len(scored)} with hub points, {routed} routed")
         if results:
-            results.sort(key=lambda r: (round(r["J"], 3), round(r["gap"], 3)))
-            return dict(results[0], k=k, evs=[ev(b) for b in results[0]["groups"]], stats=stats)
+            key = lambda r: (round(r["J"], 3), round(r["gap"], 3))
+            results.sort(key=key)
+            # rip-up and reroute the best designs (the runner-up can overtake the best by up to ~2)
+            F = {prep["devnode"][r]: f for r, f in prep["F"].items()}
+            J_best = np.inf
+            for i, res in enumerate(results[:IMPROVE_TOP]):
+                if i and (res["J"] - IMPROVE_MARGIN >= J_best or (deadline and time.perf_counter() > deadline)):
+                    break
+                stop = time.perf_counter() + IMPROVE_TIME_S          # the best design always gets its pass
+                if i and deadline:
+                    stop = min(stop, deadline)
+                loops = improve_rings(grid, res["loops"], F=F, deadline=stop)
+                m = measure(grid, loops)
+                res.update(J_routed=res["J"], J=m["J"], loops=loops, metrics=m)
+                J_best = min(J_best, m["J"])
+            results.sort(key=key)
+            best = results[0]
+            stats.update(J_before_improve=round(best.get("J_routed", best["J"]), 4))
+            return dict(best, k=k, evs=[ev(b) for b in best["groups"]], stats=stats)
     return dict(k=None, stats=stats)
 
 

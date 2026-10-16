@@ -39,7 +39,7 @@ Ties go to the smaller area gap between hubs.
 |---|---|
 | 1. Grouping | Finds every split of the rooms into zones that meets rules 2–3, and keeps only splits with the fewest hubs. |
 | 2. Hub search | For each zone, computes the exact ring cost (length + bends, best visiting order) at every legal hub point and keeps the cheapest. This cost is a lower bound on the final J. |
-| 3. Routing | Routes each ring leg by leg, for every visiting order. Each leg pays exactly what it adds to J (overlap, crossings, bends). Orders and groupings whose lower bound can't beat the best J so far are skipped. |
+| 3. Routing | Routes each ring leg by leg, for every visiting order. Each leg pays exactly what it adds to J (overlap, crossings, bends). Orders and groupings whose lower bound can't beat the best J so far are skipped. Then the best designs are re-routed: each leg, and each device's pair of legs, is routed again against all the other wires, and a change is kept only if J drops. |
 | 4. Choice and check | Keeps the lowest J, then checks rules 1–6 again. A separate checker recomputes L, X, O and B from the output polylines alone. |
 
 The organisers fix device positions, so the grid gets an extra line through every device; devices are never moved.
@@ -62,7 +62,7 @@ python run_resplan.py --ids 14433           one plan
 python run_resplan.py --ids 14433,2401      chosen ResPlan ids
 python run_resplan.py --first 20            first 20 plans
 python run_resplan.py --split test          the 1,632 test-split plans
-python run_resplan.py --all --no-png        all 17,000 plans, JSON only (about 2 h on 14 cores)
+python run_resplan.py --all --no-png        all 17,000 plans, JSON only (about 3.5 h on 14 cores)
 ```
 
 Every plan gets two files:
@@ -103,8 +103,8 @@ Coordinates are in metres (drawing units ÷ scale), origin lower-left, y up. Eac
 
 - All **1,516** plans inside the organisers' benchmark filters are **valid**. The invalid plans have a room over 100 m², a room under 2 m², or a device outside the plan's usable space.
 - Hubs per plan: 1 in 888 plans, 2 in 660, 3 in 69, 4 in 9, 5 in 3.
-- No crossings in any plan. Median J is 43.8.
-- About 0.5 s per plan on 14 worker processes.
+- No crossings in any plan. Median J is 43.5, on average 2.0 above the lower bound.
+- About 0.8 s per plan on 14 worker processes (21 min for the split, about 3.6 h for all 17,000 plans).
 
 ## Files
 

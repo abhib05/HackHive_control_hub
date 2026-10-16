@@ -76,7 +76,8 @@ def main():
 
     # ---------------- stage 3: route rings (method 3), lowest lower bound first; skip groupings
     # whose lower bound already exceeds the best exact J found, since they cannot win
-    print("\nStage 3: ring routing (sequential with penalties, best of all visiting orders)")
+    print("\nStage 3: ring routing (sequential with penalties, best of all visiting orders, then rip-up and reroute)")
+    F = {devnode[r]: f for r, f in prep["F"].items()}
     results, best_J = [], np.inf
     for k, J2, gap, g in finalists:
         if J2 > best_J + 1e-9:
@@ -84,9 +85,11 @@ def main():
             continue
         t3 = time.perf_counter()
         loops_g = hr.route_rings(grid, [ev(b) for b in g], prep)
+        J_seq = hr.measure(grid, loops_g)["J"]
+        loops_g = hr.improve_rings(grid, loops_g, F=F)
         m = hr.measure(grid, loops_g)
-        print(f"  {glabel(g)}: J {m['J']:.2f} (L {m['L']:.1f}, X {m['X']}, O {m['O']:.1f}, B {m['B']:.0f}), "
-              f"lower bound {J2:.1f}, area gap {gap:.0f} m2   {time.perf_counter() - t3:.1f} s")
+        print(f"  {glabel(g)}: J {m['J']:.2f} (L {m['L']:.1f}, X {m['X']}, O {m['O']:.1f}, B {m['B']:.0f}; "
+              f"{J_seq:.2f} before rip-up), lower bound {J2:.1f}, area gap {gap:.0f} m2   {time.perf_counter() - t3:.1f} s")
         results.append((m["J"], gap, g, loops_g, J2))
         best_J = min(best_J, m["J"])
 
