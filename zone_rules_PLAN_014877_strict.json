@@ -1,0 +1,413 @@
+{
+ "plan_id": "PLAN_014877",
+ "units": "m",
+ "hubs": [
+  {
+   "hub_id": "H1",
+   "room_id": "R01",
+   "location": {
+    "x": 12.4,
+    "y": 9.3
+   },
+   "assigned_rooms": [
+    "R01",
+    "R02",
+    "R05"
+   ],
+   "assigned_nodes": [
+    "N1",
+    "N2",
+    "N5"
+   ],
+   "closed_sequence": [
+    "H1",
+    "N2",
+    "N1",
+    "N5",
+    "H1"
+   ],
+   "route_segments": [
+    {
+     "from": "H1",
+     "to": "N2",
+     "length_m": 6.69,
+     "polyline": [
+      [
+       12.4,
+       9.3
+      ],
+      [
+       9.8,
+       9.3
+      ],
+      [
+       9.8,
+       12.36
+      ],
+      [
+       8.77,
+       12.36
+      ]
+     ]
+    },
+    {
+     "from": "N2",
+     "to": "N1",
+     "length_m": 9.27,
+     "polyline": [
+      [
+       8.77,
+       12.36
+      ],
+      [
+       8.77,
+       12.4
+      ],
+      [
+       10.8,
+       12.4
+      ],
+      [
+       10.8,
+       9.45
+      ],
+      [
+       15.05,
+       9.45
+      ]
+     ]
+    },
+    {
+     "from": "N1",
+     "to": "N5",
+     "length_m": 5.1,
+     "polyline": [
+      [
+       15.05,
+       9.45
+      ],
+      [
+       15.05,
+       8.5
+      ],
+      [
+       13.24,
+       8.5
+      ],
+      [
+       13.24,
+       6.16
+      ]
+     ]
+    },
+    {
+     "from": "N5",
+     "to": "H1",
+     "length_m": 3.98,
+     "polyline": [
+      [
+       13.24,
+       6.16
+      ],
+      [
+       12.4,
+       6.16
+      ],
+      [
+       12.4,
+       9.3
+      ]
+     ]
+    }
+   ],
+   "ring_length_m": 25.04,
+   "zone_area_m2": 89.5489,
+   "node_count": 3,
+   "bends": 12
+  },
+  {
+   "hub_id": "H2",
+   "room_id": "R03",
+   "location": {
+    "x": 5.03,
+    "y": 6.5
+   },
+   "assigned_rooms": [
+    "R03"
+   ],
+   "assigned_nodes": [
+    "N3"
+   ],
+   "closed_sequence": [
+    "H2",
+    "N3",
+    "H2"
+   ],
+   "route_segments": [
+    {
+     "from": "H2",
+     "to": "N3",
+     "length_m": 0.02,
+     "polyline": [
+      [
+       5.03,
+       6.5
+      ],
+      [
+       5.03,
+       6.48
+      ]
+     ]
+    },
+    {
+     "from": "N3",
+     "to": "H2",
+     "length_m": 0.02,
+     "polyline": [
+      [
+       5.03,
+       6.48
+      ],
+      [
+       5.03,
+       6.5
+      ]
+     ]
+    }
+   ],
+   "ring_length_m": 0.04,
+   "zone_area_m2": 24.4956,
+   "node_count": 1,
+   "bends": 2
+  },
+  {
+   "hub_id": "H3",
+   "room_id": "R04",
+   "location": {
+    "x": 4.3,
+    "y": 11.64
+   },
+   "assigned_rooms": [
+    "R04"
+   ],
+   "assigned_nodes": [
+    "N4"
+   ],
+   "closed_sequence": [
+    "H3",
+    "N4",
+    "H3"
+   ],
+   "route_segments": [
+    {
+     "from": "H3",
+     "to": "N4",
+     "length_m": 0.04,
+     "polyline": [
+      [
+       4.3,
+       11.64
+      ],
+      [
+       4.34,
+       11.64
+      ]
+     ]
+    },
+    {
+     "from": "N4",
+     "to": "H3",
+     "length_m": 0.04,
+     "polyline": [
+      [
+       4.34,
+       11.64
+      ],
+      [
+       4.3,
+       11.64
+      ]
+     ]
+    }
+   ],
+   "ring_length_m": 0.08,
+   "zone_area_m2": 24.615,
+   "node_count": 1,
+   "bends": 2
+  }
+ ],
+ "reported_metrics": {
+  "hub_count": 3,
+  "total_length_m": 25.16,
+  "crossings": 0,
+  "overlap_m": 0.06,
+  "bends": 16,
+  "cost_J": 33.22,
+  "area_gap_m2": 65.0534,
+  "lower_bound_J": 31.58,
+  "hub_lower_bound": 2
+ },
+ "status": "valid",
+ "violations": [],
+ "warnings": [],
+ "resplan_id": 14877,
+ "scale_units_per_m": 13.6013,
+ "coordinate_frame": "metres = drawing units / scale; drawing origin and axes (lower-left, y up)",
+ "rooms": [
+  {
+   "room_id": "R01",
+   "type": "living",
+   "area_m2": 52.4686,
+   "has_device": true
+  },
+  {
+   "room_id": "R02",
+   "type": "bedroom",
+   "area_m2": 18.0132,
+   "has_device": true
+  },
+  {
+   "room_id": "R03",
+   "type": "bedroom",
+   "area_m2": 24.4956,
+   "has_device": true
+  },
+  {
+   "room_id": "R04",
+   "type": "bedroom",
+   "area_m2": 24.615,
+   "has_device": true
+  },
+  {
+   "room_id": "R05",
+   "type": "kitchen",
+   "area_m2": 19.0671,
+   "has_device": true
+  },
+  {
+   "room_id": "R06",
+   "type": "bathroom",
+   "area_m2": 5.0252,
+   "has_device": false
+  },
+  {
+   "room_id": "R07",
+   "type": "bathroom",
+   "area_m2": 5.6934,
+   "has_device": false
+  },
+  {
+   "room_id": "R08",
+   "type": "bathroom",
+   "area_m2": 5.7777,
+   "has_device": false
+  }
+ ],
+ "nodes": [
+  {
+   "node_id": "N1",
+   "room_id": "R01",
+   "x": 15.05,
+   "y": 9.45
+  },
+  {
+   "node_id": "N2",
+   "room_id": "R02",
+   "x": 8.77,
+   "y": 12.36
+  },
+  {
+   "node_id": "N3",
+   "room_id": "R03",
+   "x": 5.03,
+   "y": 6.48
+  },
+  {
+   "node_id": "N4",
+   "room_id": "R04",
+   "x": 4.34,
+   "y": 11.64
+  },
+  {
+   "node_id": "N5",
+   "room_id": "R05",
+   "x": 13.24,
+   "y": 6.16
+  }
+ ],
+ "devices": "added by this pipeline: one per living room, bedroom, kitchen and storage room",
+ "solver": {
+  "zone_mode": "own",
+  "grid_m": 0.1,
+  "hub_clearance_m": 0.5,
+  "wire_clearance_m": 0.01,
+  "grid_points": 21060,
+  "prep_s": 0.43,
+  "lower_bound_hubs": 2,
+  "blocks": 14,
+  "hubs_tried": 3,
+  "groupings": 5,
+  "groupings_with_hub_points": 5,
+  "groupings_routed": 1,
+  "runtime_s": 0.98
+ },
+ "links": [
+  {
+   "rooms": [
+    "R01",
+    "R02"
+   ],
+   "type": "door"
+  },
+  {
+   "rooms": [
+    "R01",
+    "R03"
+   ],
+   "type": "door"
+  },
+  {
+   "rooms": [
+    "R01",
+    "R04"
+   ],
+   "type": "door"
+  },
+  {
+   "rooms": [
+    "R01",
+    "R05"
+   ],
+   "type": "opening"
+  },
+  {
+   "rooms": [
+    "R01",
+    "R06"
+   ],
+   "type": "door"
+  },
+  {
+   "rooms": [
+    "R03",
+    "R07"
+   ],
+   "type": "door"
+  },
+  {
+   "rooms": [
+    "R04",
+    "R08"
+   ],
+   "type": "door"
+  }
+ ],
+ "check": {
+  "L": 25.160000000000004,
+  "X": 0,
+  "O": 0.05999999999999961,
+  "B": 16,
+  "J": 33.22,
+  "agrees_with_solver": true
+ }
+}
