@@ -1,18 +1,20 @@
-"""Batch runner: ResPlan plans -> one output JSON per plan, plus summary.csv (and optional overlays).
+"""Batch runner: ResPlan plans -> one output JSON and one overlay image per plan, plus summary.csv.
 
 Plain Python, no manual step: every plan gets its devices added (one per living room, bedroom,
-kitchen and storage room), hubs, zones and closed rings, and is written as JSON (deck slide 8).
+kitchen and storage room), hubs, zones and closed rings, and is written as JSON (deck slide 8) plus
+an overlay image of the plan with its hubs, devices and wire rings.
 
 cmd, from the project folder:
-    python run_resplan.py --first 20 --png          first 20 plans of ResPlan.pkl, with overlay PNGs
+    python run_resplan.py --ids 14433               one plan: PLAN_014433.json + PLAN_014433.png
+    python run_resplan.py --ids 14433,14926         chosen ResPlan ids
+    python run_resplan.py --first 20                first 20 plans of ResPlan.pkl
     python run_resplan.py --split test              the 1,632 test-split plans (ids from split.json)
-    python run_resplan.py --all                     all 17,000 plans
-    python run_resplan.py --ids 14433,14926 --png   chosen ResPlan ids
+    python run_resplan.py --all --no-png            all 17,000 plans, JSON only
     python run_resplan.py --sample 500 --seed 0     random sample of plans
     python run_resplan.py --inputs DIR              plan input JSON files (*.json) instead of ResPlan.pkl
-Options: --out DIR (default resplan_output)   --workers N (default: CPU cores - 2)   --png   --force
+Options: --out DIR (default resplan_output)   --workers N (default: CPU cores - 2)   --no-png   --force
          --write-inputs (also save each plan's input JSON, devices included)   --zone any|excluded|own
-Re-running skips plans whose JSON already exists (resume); --force redoes them.
+Re-running skips plans whose JSON (and image, unless --no-png) already exist (resume); --force redoes them.
 Writes OUT/json/<plan_id>.json, OUT/png/<plan_id>.png, OUT/inputs/<plan_id>.json and OUT/summary.csv.
 """
 import argparse
@@ -62,7 +64,7 @@ def work(task):
     if opts["write_inputs"] and inp is not None:
         with open(os.path.join(opts["out"], "inputs", f"{pid}.json"), "w", encoding="utf-8") as f:
             json.dump(rs.input_to_json(inp), f)
-    if opts["png"] and inp is not None and out.get("hubs"):
+    if opts["png"] and inp is not None:
         try:
             rs.draw_overlay(inp, out, os.path.join(opts["out"], "png", f"{pid}.png"), (extras or {}).get("chk"))
         except Exception as e:                                    # noqa: BLE001
@@ -152,7 +154,9 @@ def main():
     ap.add_argument("--pkl", default=os.path.join(HERE, "ResPlan.pkl"))
     ap.add_argument("--out", default=os.path.join(HERE, "resplan_output"))
     ap.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2) - 2))
-    ap.add_argument("--png", action="store_true", help="also draw an overlay PNG per plan")
+    ap.add_argument("--no-png", dest="png", action="store_false",
+                    help="skip the overlay PNG per plan (drawn by default)")
+    ap.add_argument("--png", dest="png", action="store_true", help=argparse.SUPPRESS)   # old flag, now the default
     ap.add_argument("--write-inputs", action="store_true", help="also save each plan's input JSON")
     ap.add_argument("--force", action="store_true", help="redo plans whose JSON already exists")
     ap.add_argument("--zone", choices=["any", "excluded", "own"], default="any",
@@ -162,8 +166,10 @@ def main():
     for sub in ("json", "png", "inputs"):
         os.makedirs(os.path.join(a.out, sub), exist_ok=True)
     opts = dict(out=a.out, png=a.png, write_inputs=a.write_inputs, zone=a.zone)
-    done = set() if a.force else {os.path.splitext(os.path.basename(p))[0]
-                                  for p in glob.glob(os.path.join(a.out, "json", "*.json"))}
+    stem = lambda p: os.path.splitext(os.path.basename(p))[0]
+    done = set() if a.force else {stem(p) for p in glob.glob(os.path.join(a.out, "json", "*.json"))}
+    if a.png:                                     # a plan without its overlay image is not done yet
+        done &= {stem(p) for p in glob.glob(os.path.join(a.out, "png", "*.png"))}
     t0 = time.perf_counter()
     if a.inputs:
         files = sorted(glob.glob(os.path.join(a.inputs, "*.json")))
@@ -211,7 +217,8 @@ def main():
               f"({(time.perf_counter() - t1) / len(tasks):.2f} s per plan with {a.workers} workers)")
     rows = write_summary(a.out)
     report(rows)
-    print(f"\nOutput: {os.path.join(a.out, 'json')}  and  {os.path.join(a.out, 'summary.csv')}")
+    print(f"\nOutput: {os.path.join(a.out, 'json')}" + (f"  {os.path.join(a.out, 'png')}" if a.png else "")
+          + f"  and  {os.path.join(a.out, 'summary.csv')}")
 
 
 if __name__ == "__main__":

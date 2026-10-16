@@ -58,19 +58,25 @@ tar -xf resplan.zip
 ## Run (Windows cmd, from this folder)
 
 ```
-python run_resplan.py --first 1 --png       first plan, with overlay image
-python run_resplan.py --ids 14433,2401 --png chosen ResPlan ids
+python run_resplan.py --ids 14433           one plan
+python run_resplan.py --ids 14433,2401      chosen ResPlan ids
+python run_resplan.py --first 20            first 20 plans
 python run_resplan.py --split test          the 1,632 test-split plans
-python run_resplan.py --all                 all 17,000 plans (about 2 h on 14 cores)
+python run_resplan.py --all --no-png        all 17,000 plans, JSON only (about 2 h on 14 cores)
 ```
 
-Output goes to `resplan_output\json\PLAN_<id>.json` (one file per plan) and `resplan_output\summary.csv`.
-Overlay images go to `resplan_output\png\` when you pass `--png`. Re-running skips finished plans; `--force` redoes them.
+Every plan gets two files:
+
+- `resplan_output\json\PLAN_<id>.json`: the design (organisers' format plus checks).
+- `resplan_output\png\PLAN_<id>.png`: the floor plan with zones, hubs, devices, visiting order and wire rings. A plan without a design shows its rooms, devices and the reason.
+
+`resplan_output\summary.csv` gets one row per plan. Re-running skips plans that already have both files; `--force` redoes them.
 
 Options:
 
 | Option | Effect |
 |---|---|
+| `--no-png` | skip the images (about 0.2 s and 70 KB per plan) |
 | `--workers N` | number of worker processes |
 | `--zone any\|excluded\|own` | which reading of rule 3 to use (default `any`) |
 | `--write-inputs` | also save each plan's input JSON |

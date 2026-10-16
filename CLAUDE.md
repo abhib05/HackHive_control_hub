@@ -66,11 +66,12 @@ Authoritative brief: `Cable Ring Challenge - Problem Statement4.pptx` (organiser
 ## How to run (cmd)
 ```
 cd /d "C:\Users\abhin\OneDrive\Desktop\Honeywell_hackathon"
-python run_resplan.py --first 20 --png        (quick look, overlays in resplan_output\png)
+python run_resplan.py --ids 14433             (one plan: JSON + overlay image)
+python run_resplan.py --first 20              (quick look)
 python run_resplan.py --split test            (1,632 test plans)
-python run_resplan.py --all                   (all 17,000 plans)
+python run_resplan.py --all --no-png          (all 17,000 plans, JSON only)
 ```
-Output: `resplan_output\json\PLAN_<id>.json` (one per plan) and `resplan_output\summary.csv` (incl. `in_benchmark`: slide-3 filters — eligible rooms 2–100 m², every device in free space, all devices in one connected part of inner − wall − window). Re-running resumes; `--force` redoes. Options: `--workers N`, `--png`, `--write-inputs`, `--zone any|excluded|own` (default any), `--inputs DIR` (input JSON files instead of the pickle).
+Output per plan (user decision 2026-10-16: JSON **and** image by default): `resplan_output\json\PLAN_<id>.json` and `resplan_output\png\PLAN_<id>.png` (zones, hubs, devices, visiting order, rings; a plan without a design shows its rooms, devices and the reason). Plus `resplan_output\summary.csv` (incl. `in_benchmark`: slide-3 filters — eligible rooms 2–100 m², every device in free space, all devices in one connected part of inner − wall − window). Re-running resumes (a plan is done when both files exist); `--force` redoes. Options: `--no-png` (skip images: ~0.2 s and ~70 KB per plan), `--workers N`, `--write-inputs`, `--zone any|excluded|own` (default any), `--inputs DIR` (input JSON files instead of the pickle).
 
 ## Environment
 - OS: Windows, commands run in **cmd**

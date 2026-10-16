@@ -699,6 +699,8 @@ def draw_overlay(inp, out, path, chk=None):
     lines = [f"{hb['hub_id']} in {hb['room_id']}: " + " → ".join(hb["closed_sequence"])
              + f"   zone {', '.join(hb['assigned_rooms'])} ({hb['zone_area_m2']:.0f} m², {hb['node_count']} nodes)"
              f"   ring {hb['ring_length_m']:.2f} m, {hb['bends']} bends" for hb in out["hubs"]]
+    if not out["hubs"] and out.get("reason"):
+        lines.append(f"NO DESIGN: {out['reason']}")
     lines.append("square = hub (label at its lower left), dark circle = device")
     lines += [f"VIOLATION: {v}" for v in out.get("violations", [])]
     lines.append("grey = no device (bathroom / stair); pink = doors; cyan = windows; numbered dots = visiting order")
